@@ -136,15 +136,13 @@ export function defaultFilterState(): FilterState {
 export function applyFilters(
   rows: PerfRow[],
   f: FilterState,
-  options: { isSearchTerms?: boolean } = {}
+  options: { isSearchTerms?: boolean; isPmaxSearchInsights?: boolean } = {}
 ): PerfRow[] {
   return rows.filter((r) => {
     if (options.isSearchTerms) {
-      // Search-term statuses: NONE / ADDED / EXCLUDED (UNKNOWN sometimes too).
       if (f.searchTermStatus !== 'all') {
         const s = (r.status ?? '').toUpperCase();
         const want = f.searchTermStatus.toUpperCase();
-        // Treat missing/UNKNOWN as NONE (Google reports unactioned terms either way).
         const effective = !s || s === 'UNKNOWN' ? 'NONE' : s;
         if (effective !== want) return false;
       }
@@ -159,8 +157,15 @@ export function applyFilters(
     }
     // synthetic rows ("Other PMax" residual buckets) have cost=0 by design but real
     // NCs/revenue — keep them visible regardless of the zero-spend filter.
-    if (f.hideZeroSpend && (r.metrics?.cost ?? 0) <= 0 && !r.synthetic) {
-      return false;
+    // PMax search insights also have cost=0 by design (Google's API doesn't expose
+    // per-category cost on campaign_search_term_insight) — fall back to impressions
+    // > 0 as the activity threshold instead.
+    if (f.hideZeroSpend && !r.synthetic) {
+      if (options.isPmaxSearchInsights) {
+        if ((r.metrics?.impressions ?? 0) <= 0) return false;
+      } else if ((r.metrics?.cost ?? 0) <= 0) {
+        return false;
+      }
     }
     return true;
   });

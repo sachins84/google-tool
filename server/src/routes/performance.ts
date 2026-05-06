@@ -164,7 +164,7 @@ function buildQueryForLevel(
   return buildKeywordsQuery(opts);
 }
 
-async function fetchRowsForBrand(
+export async function fetchRowsForBrand(
   level: Level,
   brandId: number,
   from: string,
@@ -240,7 +240,7 @@ interface NetworkSplitEntry {
 }
 
 /** Brand-level spend split by ad network (Search vs Display vs YouTube vs PMax-mixed). */
-async function fetchNetworkSplit(brandId: number, from: string, to: string): Promise<NetworkSplitEntry[]> {
+export async function fetchNetworkSplit(brandId: number, from: string, to: string): Promise<NetworkSplitEntry[]> {
   const brand = getBrand(brandId);
   if (!brand?.accounts.length) return [];
   const query = `
@@ -301,7 +301,7 @@ async function fetchNetworkSplit(brandId: number, from: string, to: string): Pro
   return Array.from(buckets.values()).sort((a, b) => b.cost - a.cost);
 }
 
-async function tryFetchBrandTotals(
+export async function tryFetchBrandTotals(
   brandId: number,
   from: string, to: string,
   compareFrom?: string, compareTo?: string

@@ -105,9 +105,13 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
     return () => { cancelled = true; };
   }, [brandId, from, to, compareFrom, compareTo, tab, drill.campaignId, drill.adGroupId, drill.assetGroupId, refreshTick, isAssetTab, isPmaxDrill]);
 
+  const isPmaxSearchInsights = tab === 'search_terms' && isPmaxDrill && !!drill.campaignId;
   const filteredRows = useMemo(
-    () => applyFilters(rows, filter, { isSearchTerms: tab === 'search_terms' }),
-    [rows, filter, tab]
+    () => applyFilters(rows, filter, {
+      isSearchTerms: tab === 'search_terms',
+      isPmaxSearchInsights,
+    }),
+    [rows, filter, tab, isPmaxSearchInsights]
   );
 
   const hasCalcMetrics = useMemo(

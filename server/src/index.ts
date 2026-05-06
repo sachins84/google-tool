@@ -11,6 +11,7 @@ import { assetRoutes } from './routes/assets.js';
 import { mutateRoutes } from './routes/mutate.js';
 import { auditRoutes } from './routes/audit.js';
 import { insightsRoutes } from './routes/insights.js';
+import { mcpRoutes } from './routes/mcp.js';
 
 async function main(): Promise<void> {
   initDatabase();
@@ -35,6 +36,10 @@ async function main(): Promise<void> {
   await app.register(mutateRoutes, { prefix: '/api/mutate' });
   await app.register(auditRoutes, { prefix: '/api/audit' });
   await app.register(insightsRoutes, { prefix: '/api/insights' });
+
+  // MCP server — public (or token-gated via MCP_SECRET). Mounted outside /api/* so
+  // it bypasses the session-cookie auth middleware.
+  await app.register(mcpRoutes, { prefix: '/mcp' });
 
   await app.listen({ port: config.PORT, host: '0.0.0.0' });
   console.log(`[server] listening on http://localhost:${config.PORT}`);

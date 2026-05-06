@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState } from 'react';
 import { api, type DailyInsight, type PerfRow } from '../lib/api';
 
 interface Props {
@@ -10,67 +10,27 @@ interface Props {
   compareTo?: string;
 }
 
-interface ChatTurn { role: 'user' | 'assistant'; content: string; }
-
 export function Insights({ brandId, brandName, from, to, compareFrom, compareTo }: Props) {
-  const [rows, setRows] = useState<PerfRow[]>([]);
-  const [brandTotals, setBrandTotals] = useState<{ ncs: number; amount: number } | undefined>(undefined);
   const [insights, setInsights] = useState<DailyInsight[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [question, setQuestion] = useState('');
-  const [chat, setChat] = useState<ChatTurn[]>([]);
-  const [asking, setAsking] = useState(false);
-
-  // Load campaigns + compute insights whenever brand/date changes
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    let rows: PerfRow[] = [];
     api.perf('campaigns', { brand_id: brandId, from, to, compare_from: compareFrom, compare_to: compareTo })
-      .then(async (res) => {
-        if (cancelled) return;
-        setRows(res.rows);
-        setBrandTotals(res.brand_redshift_totals?.primary);
-        const d = await api.insightsDaily(
-          { brand_id: brandId, from, to, compare_from: compareFrom, compare_to: compareTo },
-          res.rows
-        );
-        if (!cancelled) setInsights(d.insights);
-      })
+      .then((res) => { rows = res.rows; })
+      .then(() => api.insightsDaily(
+        { brand_id: brandId, from, to, compare_from: compareFrom, compare_to: compareTo },
+        rows
+      ))
+      .then((d) => { if (!cancelled) setInsights(d.insights); })
       .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : String(err)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [brandId, from, to, compareFrom, compareTo]);
-
-  async function handleAsk(e: FormEvent) {
-    e.preventDefault();
-    const q = question.trim();
-    if (!q || asking) return;
-
-    setQuestion('');
-    setAsking(true);
-    setChat((c) => [...c, { role: 'user', content: q }]);
-    try {
-      const res = await api.insightsAsk(
-        { brand_id: brandId, from, to },
-        { question: q, rows, brand_totals: brandTotals }
-      );
-      setChat((c) => [...c, { role: 'assistant', content: res.answer }]);
-    } catch (err) {
-      setChat((c) => [...c, { role: 'assistant', content: `Error: ${err instanceof Error ? err.message : String(err)}` }]);
-    } finally {
-      setAsking(false);
-    }
-  }
-
-  const SUGGESTED = [
-    'Which campaigns dropped most in Calc ROAS?',
-    'Where should I cut spend?',
-    'Which campaigns are scaling efficiently?',
-    'What changed most vs the previous period?',
-  ];
 
   return (
     <div className="space-y-6">
@@ -111,63 +71,17 @@ export function Insights({ brandId, brandName, from, to, compareFrom, compareTo 
         )}
       </section>
 
-      <section className="space-y-3">
-        <h3 className="font-medium">Ask a question</h3>
-
-        {chat.length === 0 && (
-          <div className="flex flex-wrap gap-2 mb-2">
-            {SUGGESTED.map((s) => (
-              <button
-                key={s}
-                onClick={() => setQuestion(s)}
-                disabled={asking}
-                className="text-xs bg-gray-100 hover:bg-gray-200 px-3 py-1 rounded text-gray-700"
-              >
-                {s}
-              </button>
-            ))}
-          </div>
-        )}
-
-        <div className="space-y-3">
-          {chat.map((t, idx) => (
-            <div
-              key={idx}
-              className={`rounded p-3 text-sm whitespace-pre-wrap ${
-                t.role === 'user' ? 'bg-gray-100 text-gray-800' : 'bg-white border shadow-sm text-gray-900'
-              }`}
-            >
-              <div className="text-[10px] uppercase text-gray-500 mb-1">{t.role}</div>
-              {t.content}
-            </div>
-          ))}
-          {asking && (
-            <div className="rounded p-3 text-sm bg-white border shadow-sm text-gray-500">
-              <div className="text-[10px] uppercase text-gray-400 mb-1">assistant</div>
-              Thinking…
-            </div>
-          )}
+      <section className="bg-blue-50 border border-blue-200 rounded p-4 text-sm space-y-2">
+        <div className="font-medium text-blue-900">Ask deeper questions in Claude.ai</div>
+        <p className="text-blue-900">
+          For free-form Q&A, connect this tool's MCP server to Claude.ai instead of running queries here. Claude.ai can pull live data from the same source and reason across multiple tools (e.g. cross-checking with your meta-tool MCP).
+        </p>
+        <div className="font-mono text-xs bg-white border rounded px-3 py-2 text-gray-800">
+          MCP endpoint: <code>http://localhost:4000/mcp</code> &nbsp;·&nbsp; Available tools:
+          <code> list_brands</code>, <code>list_accessible_accounts</code>, <code>get_campaigns</code>, <code>get_network_split</code>, <code>get_daily_insights</code>, <code>get_audit_log</code>
         </div>
-
-        <form onSubmit={handleAsk} className="flex gap-2">
-          <input
-            type="text"
-            value={question}
-            onChange={(e) => setQuestion(e.target.value)}
-            placeholder="Ask about campaign performance, ROAS, NCs, what to scale or pause…"
-            className="flex-1 border rounded px-3 py-2 text-sm"
-            disabled={asking}
-          />
-          <button
-            type="submit"
-            disabled={asking || !question.trim() || loading}
-            className="bg-black text-white px-4 py-2 rounded text-sm hover:opacity-90 disabled:opacity-40"
-          >
-            Ask
-          </button>
-        </form>
-        <p className="text-xs text-gray-500">
-          Powered by Claude. Answers are based on the campaigns + Calc ROAS shown for the selected brand and date range.
+        <p className="text-xs text-blue-800">
+          To add: in Claude.ai → Settings → MCP servers → Add → paste the URL above. Optional: set <code>MCP_SECRET</code> in <code>.env</code> for token auth before exposing publicly.
         </p>
       </section>
     </div>
