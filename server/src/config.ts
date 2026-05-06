@@ -25,6 +25,8 @@ const schema = z.object({
   REDSHIFT_DB: z.string().optional(),
   REDSHIFT_USER: z.string().optional(),
   REDSHIFT_PASSWORD: z.string().optional(),
+
+  ANTHROPIC_API_KEY: z.string().optional(),
 });
 
 const parsed = schema.safeParse(process.env);

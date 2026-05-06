@@ -9,6 +9,7 @@ import {
   buildAdsQuery,
   buildKeywordsQuery,
   buildSearchTermsQuery,
+  buildPmaxSearchTermsQuery,
   type Level,
 } from '../services/gaql.js';
 import { search } from '../services/google-ads.js';
@@ -228,6 +229,76 @@ interface BrandRedshiftRow {
 interface BrandRsTotal {
   ncs: number;
   amount: number;
+}
+
+interface NetworkSplitEntry {
+  network: string;       // SEARCH | SEARCH_PARTNERS | CONTENT | YOUTUBE | PMAX_MIXED | OTHER
+  cost: number;
+  clicks: number;
+  impressions: number;
+  conversions: number;
+}
+
+/** Brand-level spend split by ad network (Search vs Display vs YouTube vs PMax-mixed). */
+async function fetchNetworkSplit(brandId: number, from: string, to: string): Promise<NetworkSplitEntry[]> {
+  const brand = getBrand(brandId);
+  if (!brand?.accounts.length) return [];
+  const query = `
+    SELECT campaign.advertising_channel_type, segments.ad_network_type,
+           metrics.cost_micros, metrics.clicks, metrics.impressions, metrics.conversions
+    FROM campaign
+    WHERE segments.date BETWEEN '${from}' AND '${to}'
+      AND metrics.cost_micros > 0
+  `.trim();
+
+  const perAccount = await Promise.all(
+    brand.accounts.map(async (acc) => {
+      try {
+        const loginCustomerId = (await getLoginCustomerId(acc.customer_id)) ?? undefined;
+        return await search<{
+          campaign?: { advertisingChannelType?: string };
+          segments?: { adNetworkType?: string };
+          metrics?: Record<string, unknown>;
+        }>({ customerId: acc.customer_id, loginCustomerId, query });
+      } catch {
+        return [];
+      }
+    })
+  );
+
+  const buckets = new Map<string, NetworkSplitEntry>();
+  function bucket(network: string): NetworkSplitEntry {
+    const existing = buckets.get(network);
+    if (existing) return existing;
+    const fresh = { network, cost: 0, clicks: 0, impressions: 0, conversions: 0 };
+    buckets.set(network, fresh);
+    return fresh;
+  }
+
+  for (const rows of perAccount) {
+    for (const r of rows) {
+      const channel = r.campaign?.advertisingChannelType ?? 'UNKNOWN';
+      const rawNetwork = r.segments?.adNetworkType ?? 'UNKNOWN';
+      // For PMax campaigns, ad_network_type returns MIXED — Google doesn't expose
+      // the per-network split via reporting API. Bucket these as 'PMAX (mixed)'.
+      const network = channel === 'PERFORMANCE_MAX'
+        ? 'PMax (mixed)'
+        : rawNetwork === 'CONTENT' ? 'Display'
+        : rawNetwork === 'SEARCH' ? 'Search'
+        : rawNetwork === 'SEARCH_PARTNERS' ? 'Search Partners'
+        : rawNetwork === 'YOUTUBE' || rawNetwork === 'YOUTUBE_WATCH' || rawNetwork === 'YOUTUBE_SEARCH' ? 'YouTube'
+        : rawNetwork === 'GOOGLE_TV' ? 'Google TV'
+        : rawNetwork.replace(/_/g, ' ');
+      const e = bucket(network);
+      const m = r.metrics ?? {};
+      e.cost += Number(m.costMicros ?? 0) / 1_000_000;
+      e.clicks += Number(m.clicks ?? 0);
+      e.impressions += Number(m.impressions ?? 0);
+      e.conversions += Number(m.conversions ?? 0);
+    }
+  }
+
+  return Array.from(buckets.values()).sort((a, b) => b.cost - a.cost);
 }
 
 async function tryFetchBrandTotals(
@@ -668,6 +739,55 @@ function rowKey(level: Level, row: Row): string {
 export async function performanceRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAuth);
 
+  // PMax search-term insights — privacy-aggregated category labels, not raw queries
+  app.get('/pmax-search-terms', async (req, reply) => {
+    const parsed = querySchema.safeParse(req.query);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    const q = parsed.data;
+    if (!q.campaign_id) return reply.code(400).send({ error: 'campaign_id required' });
+
+    const brand = getBrand(q.brand_id);
+    if (!brand) return reply.code(404).send({ error: 'Brand not found' });
+
+    try {
+      const query = buildPmaxSearchTermsQuery({
+        level: 'search_term', from: q.from, to: q.to, campaignIds: [q.campaign_id],
+      });
+      const perAccount = await Promise.all(
+        brand.accounts.map(async (acc) => {
+          try {
+            const loginCustomerId = (await getLoginCustomerId(acc.customer_id)) ?? undefined;
+            return await search<{
+              campaignSearchTermInsight?: { id?: string; categoryLabel?: string };
+              metrics?: Record<string, unknown>;
+            }>({ customerId: acc.customer_id, loginCustomerId, query });
+          } catch (err) {
+            app.log.warn(
+              { customer_id: acc.customer_id, err: err instanceof Error ? err.message : String(err) },
+              'pmax-search-terms account fetch failed'
+            );
+            return [];
+          }
+        })
+      );
+      const rows = perAccount.flat().map((r) => {
+        const raw = parseRawFromGoogle(r.metrics ?? {});
+        const label = r.campaignSearchTermInsight?.categoryLabel?.trim() || '(other / aggregated)';
+        return {
+          customer_id: brand.accounts[0]?.customer_id ?? '',
+          search_term: label,
+          status: 'NONE',
+          metrics: applyFlatRto(deriveMetrics(raw), brand.rto_factor),
+        };
+      });
+      return { rows: rows.sort((a, b) => b.metrics.impressions - a.metrics.impressions) };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      app.log.error({ err: message }, 'pmax search terms fetch failed');
+      return reply.code(500).send({ error: message });
+    }
+  });
+
   for (const level of ['campaign', 'ad_group', 'asset_group', 'ad', 'keyword', 'search_term'] as const) {
     const path = level === 'campaign' ? '/campaigns'
       : level === 'ad_group' ? '/ad-groups'
@@ -701,15 +821,15 @@ export async function performanceRoutes(app: FastifyInstance): Promise<void> {
         // Independent of per-row matching, so NCs total stays accurate even when
         // some campaigns can't be linked via utm_campaign.
         let brand_redshift_totals: { primary?: BrandRsTotal; compare?: BrandRsTotal } | undefined;
+        let network_split: NetworkSplitEntry[] | undefined;
         if (level === 'campaign') {
-          brand_redshift_totals = await tryFetchBrandTotals(
-            q.brand_id,
-            q.from, q.to,
-            q.compare_from, q.compare_to
-          );
+          [brand_redshift_totals, network_split] = await Promise.all([
+            tryFetchBrandTotals(q.brand_id, q.from, q.to, q.compare_from, q.compare_to),
+            fetchNetworkSplit(q.brand_id, q.from, q.to),
+          ]);
         }
 
-        return { rows: primary, brand_redshift_totals };
+        return { rows: primary, brand_redshift_totals, network_split };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         app.log.error({ err: message }, `${level} fetch failed`);

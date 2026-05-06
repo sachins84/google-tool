@@ -79,7 +79,47 @@ export const api = {
         primary?: { ncs: number; amount: number };
         compare?: { ncs: number; amount: number };
       };
+      network_split?: NetworkSplitEntry[];
     }>(`/api/${level}?${qs.toString()}`);
+  },
+
+  pmaxSearchTerms: (params: PerfParams) => {
+    const qs = new URLSearchParams();
+    qs.set('brand_id', String(params.brand_id));
+    qs.set('from', params.from);
+    qs.set('to', params.to);
+    if (params.campaign_id) qs.set('campaign_id', params.campaign_id);
+    return request<{ rows: PerfRow[] }>(`/api/pmax-search-terms?${qs.toString()}`);
+  },
+
+  insightsDaily: (
+    params: { brand_id: number; from: string; to: string; compare_from?: string; compare_to?: string },
+    rows: PerfRow[]
+  ) => {
+    const qs = new URLSearchParams();
+    qs.set('brand_id', String(params.brand_id));
+    qs.set('from', params.from);
+    qs.set('to', params.to);
+    if (params.compare_from) qs.set('compare_from', params.compare_from);
+    if (params.compare_to) qs.set('compare_to', params.compare_to);
+    return request<{ insights: DailyInsight[] }>(`/api/insights/daily?${qs.toString()}`, {
+      method: 'POST',
+      body: JSON.stringify({ rows }),
+    });
+  },
+
+  insightsAsk: (
+    params: { brand_id: number; from: string; to: string },
+    body: { question: string; rows: PerfRow[]; brand_totals?: { ncs: number; amount: number } }
+  ) => {
+    const qs = new URLSearchParams();
+    qs.set('brand_id', String(params.brand_id));
+    qs.set('from', params.from);
+    qs.set('to', params.to);
+    return request<{ answer: string }>(`/api/insights/ask?${qs.toString()}`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
   },
 
   assets: (params: {
@@ -216,6 +256,22 @@ export interface AuditEntry {
   dry_run: boolean;
   response: unknown;
   created_at: number;
+}
+
+export interface NetworkSplitEntry {
+  network: string;
+  cost: number;
+  clicks: number;
+  impressions: number;
+  conversions: number;
+}
+
+export interface DailyInsight {
+  kind: string;
+  severity: 'high' | 'medium' | 'low';
+  message: string;
+  campaign_name?: string;
+  detail: Record<string, unknown>;
 }
 
 export interface BrandPayload {

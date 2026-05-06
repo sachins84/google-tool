@@ -3,6 +3,7 @@ import { Header, type DashState, type View } from '../components/Header';
 import { Performance } from './Performance';
 import { Settings } from './Settings';
 import { Audit } from './Audit';
+import { Insights } from './Insights';
 import { api } from '../lib/api';
 
 interface Props {
@@ -57,6 +58,19 @@ export function Dashboard({ username, onLogout }: Props) {
           <Settings onBrandsChanged={refreshBrands} />
         ) : view === 'audit' ? (
           <Audit />
+        ) : view === 'insights' ? (
+          state.brandId && state.from && state.to ? (
+            <Insights
+              brandId={state.brandId}
+              brandName={brands.find((b) => b.id === state.brandId)?.name ?? ''}
+              from={state.from}
+              to={state.to}
+              compareFrom={state.compareFrom}
+              compareTo={state.compareTo}
+            />
+          ) : (
+            <div className="text-sm text-gray-500 py-8 text-center">Select a brand and date range above.</div>
+          )
         ) : state.brandId && state.from && state.to ? (
           <Performance
             brandId={state.brandId}

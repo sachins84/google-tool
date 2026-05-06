@@ -5,6 +5,8 @@ import { MetricsTable, type RowAction, type TableLevel } from '../components/Met
 import { MutationModal } from '../components/MutationModal';
 import { Assets } from './Assets';
 import { Filters, applyFilters, defaultFilterState, type FilterState } from '../components/Filters';
+import { NetworkSplit } from '../components/NetworkSplit';
+import type { NetworkSplitEntry } from '../lib/api';
 
 interface Props {
   brandId: number;
@@ -67,6 +69,7 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
     primary?: { ncs: number; amount: number };
     compare?: { ncs: number; amount: number };
   } | undefined>(undefined);
+  const [networkSplit, setNetworkSplit] = useState<NetworkSplitEntry[]>([]);
 
   const hasCompare = !!(compareFrom && compareTo);
   const isAssetTab = tab === 'assets';
@@ -77,27 +80,30 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
     let cancelled = false;
     setLoading(true);
     setError(null);
-    const path = PATH_FOR_TAB[tab];
-    api
-      .perf(path, {
-        brand_id: brandId,
-        from,
-        to,
-        compare_from: compareFrom,
-        compare_to: compareTo,
-        campaign_id: drill.campaignId,
-        ad_group_id: drill.adGroupId,
-        asset_group_id: drill.assetGroupId,
-      })
+
+    // PMax has a different search-terms endpoint (campaign_search_term_insight,
+    // returns aggregated category labels rather than raw queries).
+    const usePmaxSearchTerms = tab === 'search_terms' && isPmaxDrill && drill.campaignId;
+    const promise = usePmaxSearchTerms
+      ? api.pmaxSearchTerms({ brand_id: brandId, from, to, campaign_id: drill.campaignId })
+      : api.perf(PATH_FOR_TAB[tab], {
+          brand_id: brandId, from, to,
+          compare_from: compareFrom, compare_to: compareTo,
+          campaign_id: drill.campaignId, ad_group_id: drill.adGroupId, asset_group_id: drill.assetGroupId,
+        });
+
+    promise
       .then((res) => {
         if (cancelled) return;
         setRows(res.rows);
-        setBrandTotals(res.brand_redshift_totals);
+        const r = res as { brand_redshift_totals?: typeof brandTotals; network_split?: NetworkSplitEntry[] };
+        setBrandTotals(r.brand_redshift_totals);
+        setNetworkSplit(r.network_split ?? []);
       })
       .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : String(err)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [brandId, from, to, compareFrom, compareTo, tab, drill.campaignId, drill.adGroupId, drill.assetGroupId, refreshTick, isAssetTab]);
+  }, [brandId, from, to, compareFrom, compareTo, tab, drill.campaignId, drill.adGroupId, drill.assetGroupId, refreshTick, isAssetTab, isPmaxDrill]);
 
   const filteredRows = useMemo(
     () => applyFilters(rows, filter, { isSearchTerms: tab === 'search_terms' }),
@@ -179,9 +185,11 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
       // No drill yet — only Campaigns is meaningful (Assets is too, just shows everything)
       return { disabled: false };
     }
-    if (isPmaxDrill && (t === 'ad_groups' || t === 'ads' || t === 'keywords' || t === 'search_terms')) {
+    if (isPmaxDrill && (t === 'ad_groups' || t === 'ads' || t === 'keywords')) {
       return { disabled: true, tip: 'Not applicable to Performance Max — use Asset Groups / Assets' };
     }
+    // Search Terms IS available for PMax (campaign_search_term_insight) — but as
+    // privacy-aggregated category labels, not raw queries.
     if (drill.campaignChannelType && !isPmaxDrill && t === 'asset_groups') {
       return { disabled: true, tip: `Asset Groups are PMax-only (this is ${drill.campaignChannelType.replace('_', ' ')})` };
     }
@@ -191,11 +199,16 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
   return (
     <div className="space-y-5">
       {!isAssetTab && (
-        <KpiStrip
-          rows={filteredRows}
-          hasCompare={hasCompare}
-          brandTotals={tab === 'campaigns' ? brandTotals : undefined}
-        />
+        <>
+          <KpiStrip
+            rows={filteredRows}
+            hasCompare={hasCompare}
+            brandTotals={tab === 'campaigns' ? brandTotals : undefined}
+          />
+          {tab === 'campaigns' && networkSplit.length > 0 && (
+            <NetworkSplit entries={networkSplit} />
+          )}
+        </>
       )}
 
       <div className="border-b border-gray-200">
@@ -265,6 +278,7 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
                 <>
                   <CrossTabButton active={tab === 'asset_groups'} onClick={() => setTab('asset_groups')}>Asset Groups</CrossTabButton>
                   <CrossTabButton active={tab === 'assets'} onClick={() => setTab('assets')}>Assets</CrossTabButton>
+                  <CrossTabButton active={tab === 'search_terms'} onClick={() => setTab('search_terms')}>Search Insights</CrossTabButton>
                 </>
               ) : (
                 <>

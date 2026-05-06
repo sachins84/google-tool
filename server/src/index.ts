@@ -10,6 +10,7 @@ import { performanceRoutes } from './routes/performance.js';
 import { assetRoutes } from './routes/assets.js';
 import { mutateRoutes } from './routes/mutate.js';
 import { auditRoutes } from './routes/audit.js';
+import { insightsRoutes } from './routes/insights.js';
 
 async function main(): Promise<void> {
   initDatabase();
@@ -33,6 +34,7 @@ async function main(): Promise<void> {
   await app.register(assetRoutes, { prefix: '/api/assets' });
   await app.register(mutateRoutes, { prefix: '/api/mutate' });
   await app.register(auditRoutes, { prefix: '/api/audit' });
+  await app.register(insightsRoutes, { prefix: '/api/insights' });
 
   await app.listen({ port: config.PORT, host: '0.0.0.0' });
   console.log(`[server] listening on http://localhost:${config.PORT}`);

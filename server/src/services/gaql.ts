@@ -153,6 +153,34 @@ export function buildKeywordsQuery(opts: BuildOptions): string {
   `.trim();
 }
 
+export function buildPmaxSearchTermsQuery(opts: BuildOptions): string {
+  // PMax exposes search categories (privacy-aggregated, not raw queries) via
+  // campaign_search_term_insight. Different shape than search_term_view —
+  // returns category labels with metrics scoped to a single PMax campaign.
+  // PMax search-term insight does NOT support cost_micros (Google's privacy
+  // aggregation hides per-category cost). impressions / clicks / conversions /
+  // value are the available metrics.
+  const fields = [
+    'campaign_search_term_insight.id',
+    'campaign_search_term_insight.category_label',
+    'metrics.impressions',
+    'metrics.clicks',
+    'metrics.conversions',
+    'metrics.conversions_value',
+  ];
+  const where = [dateClause(opts.from, opts.to)];
+  if (opts.campaignIds?.length === 1) {
+    where.push(`campaign_search_term_insight.campaign_id = ${opts.campaignIds[0]}`);
+  } else {
+    throw new Error('PMax search-term insight requires exactly one campaign ID');
+  }
+  return `
+    SELECT ${fields.join(', ')}
+    FROM campaign_search_term_insight
+    WHERE ${where.join(' AND ')}
+  `.trim();
+}
+
 export function buildSearchTermsQuery(opts: BuildOptions): string {
   const fields = [
     'campaign.id',
