@@ -22,7 +22,7 @@ interface Props {
   onLogout: () => void;
 }
 
-export function Dashboard({ username, onLogout }: Props): JSX.Element {
+export function Dashboard({ username, onLogout }: Props) {
   const [accounts, setAccounts] = useState<Account[] | null>(null);
   const [brands, setBrands] = useState<Brand[] | null>(null);
   const [error, setError] = useState<string | null>(null);

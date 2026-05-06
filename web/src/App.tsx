@@ -9,7 +9,7 @@ interface User {
   role: string;
 }
 
-export function App(): JSX.Element {
+export function App() {
   const [user, setUser] = useState<User | null>(null);
   const [checking, setChecking] = useState(true);
 

@@ -5,7 +5,7 @@ interface Props {
   onLogin: () => void;
 }
 
-export function Login({ onLogin }: Props): JSX.Element {
+export function Login({ onLogin }: Props) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
