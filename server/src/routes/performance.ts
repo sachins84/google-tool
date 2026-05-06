@@ -15,12 +15,15 @@ import { search } from '../services/google-ads.js';
 import {
   addRaw,
   applyFlatRto,
+  attachRedshiftMetrics,
   deriveMetrics,
   emptyRaw,
   parseRawFromGoogle,
   type DerivedMetrics,
   type RawMetrics,
 } from '../services/metrics.js';
+import { fetchByCampaign, fetchTotal } from '../services/redshift.js';
+import { getDb } from '../db/init.js';
 
 const querySchema = z.object({
   brand_id: z.coerce.number(),
@@ -196,10 +199,112 @@ async function fetchRowsForBrand(
     }
   }
 
-  return Array.from(aggregated.values()).map(({ row, raw }) => ({
+  let rows = Array.from(aggregated.values()).map(({ row, raw }) => ({
     ...row,
     metrics: applyFlatRto(deriveMetrics(raw), brand.rto_factor),
   }));
+
+  // If brand is on Redshift mode and we're at campaign level, join in NCs / AOV / calc ROAS
+  if (level === 'campaign' && brand.rto_mode === 'redshift') {
+    rows = await mergeRedshiftMetrics(rows, brandId, from, to);
+  }
+
+  return rows;
+}
+
+interface BrandRedshiftRow {
+  brand_id: number;
+  funnel_table: string | null;
+  utm_source_list: string | null;
+  enabled: number;
+}
+
+interface BrandRsTotal {
+  ncs: number;
+  amount: number;
+}
+
+async function tryFetchBrandTotals(
+  brandId: number,
+  from: string, to: string,
+  compareFrom?: string, compareTo?: string
+): Promise<{ primary?: BrandRsTotal; compare?: BrandRsTotal } | undefined> {
+  const cfg = getDb()
+    .prepare('SELECT brand_id, funnel_table, utm_source_list, enabled FROM brand_redshift_config WHERE brand_id = ?')
+    .get(brandId) as BrandRedshiftRow | undefined;
+  if (!cfg || !cfg.enabled || !cfg.funnel_table) return undefined;
+  let utmSourceList: string[] = [];
+  try { utmSourceList = JSON.parse(cfg.utm_source_list ?? '[]'); } catch { /* ignore */ }
+  if (utmSourceList.length === 0) return undefined;
+
+  const primary = await fetchTotal({ funnelTable: cfg.funnel_table, utmSourceList, dateFrom: from, dateTo: to });
+  let compare: BrandRsTotal | undefined;
+  if (compareFrom && compareTo) {
+    const c = await fetchTotal({ funnelTable: cfg.funnel_table, utmSourceList, dateFrom: compareFrom, dateTo: compareTo });
+    compare = { ncs: c.ncs, amount: c.amount };
+  }
+  return {
+    primary: { ncs: primary.ncs, amount: primary.amount },
+    compare,
+  };
+}
+
+async function mergeRedshiftMetrics(rows: Row[], brandId: number, from: string, to: string): Promise<Row[]> {
+  const cfg = getDb()
+    .prepare('SELECT brand_id, funnel_table, utm_source_list, enabled FROM brand_redshift_config WHERE brand_id = ?')
+    .get(brandId) as BrandRedshiftRow | undefined;
+  if (!cfg || !cfg.enabled || !cfg.funnel_table) return rows;
+  let utmSourceList: string[] = [];
+  try { utmSourceList = JSON.parse(cfg.utm_source_list ?? '[]'); } catch { /* ignore */ }
+  if (utmSourceList.length === 0) return rows;
+
+  const rsRows = await fetchByCampaign({
+    funnelTable: cfg.funnel_table,
+    utmSourceList,
+    dateFrom: from,
+    dateTo: to,
+  });
+
+  // utm_campaign is sometimes the Google Ads campaign ID (e.g. "23223219977"),
+  // sometimes a custom name (e.g. "LJ_shopping_Manual_Generic_MVChocolate"),
+  // and sometimes a SKU code (e.g. "MWLJNTP.00480.B0_N"). The funnel table is the
+  // only attribution we have — there's no gclid, utm_term, or utm_content stored.
+  //
+  // Three-pass match:
+  //   1. exact campaign.id (numeric utm_campaign)
+  //   2. exact lowercase campaign.name
+  //   3. normalized (alphanumeric only) campaign.name
+  const byId = new Map<string, { ncs: number; amount: number }>();
+  const byName = new Map<string, { ncs: number; amount: number }>();
+  const byNormName = new Map<string, { ncs: number; amount: number }>();
+
+  function normalize(s: string): string {
+    return s.toLowerCase().replace(/[^a-z0-9]+/g, '');
+  }
+  function add(map: Map<string, { ncs: number; amount: number }>, k: string, v: { ncs: number; amount: number }) {
+    const prev = map.get(k);
+    map.set(k, prev ? { ncs: prev.ncs + v.ncs, amount: prev.amount + v.amount } : v);
+  }
+
+  for (const r of rsRows) {
+    const entry = { ncs: r.ncs, amount: r.amount };
+    if (/^\d+$/.test(r.utm_campaign)) {
+      add(byId, r.utm_campaign, entry);
+    } else {
+      add(byName, r.utm_campaign.toLowerCase(), entry);
+      add(byNormName, normalize(r.utm_campaign), entry);
+    }
+  }
+
+  return rows.map((row) => {
+    let rs = row.campaign_id ? byId.get(row.campaign_id) : undefined;
+    if (!rs && row.campaign_name) {
+      rs = byName.get(row.campaign_name.toLowerCase())
+        ?? byNormName.get(normalize(row.campaign_name));
+    }
+    if (!rs) return row;
+    return { ...row, metrics: attachRedshiftMetrics(row.metrics, rs) };
+  });
 }
 
 function shapeRow(level: Level, customerId: string, r: GoogleAdsRow): Row {
@@ -306,7 +411,19 @@ export async function performanceRoutes(app: FastifyInstance): Promise<void> {
           }
         }
 
-        return { rows: primary };
+        // Brand-wide Redshift totals (only at campaign level — for KPI strip).
+        // Independent of per-row matching, so NCs total stays accurate even when
+        // some campaigns can't be linked via utm_campaign.
+        let brand_redshift_totals: { primary?: BrandRsTotal; compare?: BrandRsTotal } | undefined;
+        if (level === 'campaign') {
+          brand_redshift_totals = await tryFetchBrandTotals(
+            q.brand_id,
+            q.from, q.to,
+            q.compare_from, q.compare_to
+          );
+        }
+
+        return { rows: primary, brand_redshift_totals };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         app.log.error({ err: message }, `${level} fetch failed`);

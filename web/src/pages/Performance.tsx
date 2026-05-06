@@ -63,6 +63,10 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
   const [pendingAction, setPendingAction] = useState<RowAction | null>(null);
   const [refreshTick, setRefreshTick] = useState(0);
   const [filter, setFilter] = useState<FilterState>(defaultFilterState());
+  const [brandTotals, setBrandTotals] = useState<{
+    primary?: { ncs: number; amount: number };
+    compare?: { ncs: number; amount: number };
+  } | undefined>(undefined);
 
   const hasCompare = !!(compareFrom && compareTo);
   const isAssetTab = tab === 'assets';
@@ -85,7 +89,11 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
         ad_group_id: drill.adGroupId,
         asset_group_id: drill.assetGroupId,
       })
-      .then((res) => { if (!cancelled) setRows(res.rows); })
+      .then((res) => {
+        if (cancelled) return;
+        setRows(res.rows);
+        setBrandTotals(res.brand_redshift_totals);
+      })
       .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : String(err)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -94,6 +102,11 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
   const filteredRows = useMemo(
     () => applyFilters(rows, filter, { isSearchTerms: tab === 'search_terms' }),
     [rows, filter, tab]
+  );
+
+  const hasCalcMetrics = useMemo(
+    () => filteredRows.some((r) => r.metrics?.ncs != null),
+    [filteredRows]
   );
 
   function handleDrillFromCampaign(row: PerfRow) {
@@ -177,7 +190,13 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
 
   return (
     <div className="space-y-5">
-      {!isAssetTab && <KpiStrip rows={filteredRows} hasCompare={hasCompare} />}
+      {!isAssetTab && (
+        <KpiStrip
+          rows={filteredRows}
+          hasCompare={hasCompare}
+          brandTotals={tab === 'campaigns' ? brandTotals : undefined}
+        />
+      )}
 
       <div className="border-b border-gray-200">
         <nav className="flex gap-6 overflow-x-auto">
@@ -287,6 +306,7 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
           level={LEVEL_FOR_TAB[tab]}
           rows={filteredRows}
           hasCompare={hasCompare}
+          showCalcMetrics={hasCalcMetrics}
           onDrillIn={
             tab === 'campaigns' ? handleDrillFromCampaign
             : tab === 'ad_groups' ? handleDrillFromAdGroup

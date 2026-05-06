@@ -222,13 +222,44 @@ function bootstrapAdmin(database: Database.Database): void {
 
 function bootstrapDefaultBrand(database: Database.Database): void {
   const existing = database.prepare('SELECT id FROM brands LIMIT 1').get();
-  if (existing) return;
+  if (existing) {
+    // Idempotently ensure Little Joys has its Redshift config set even on existing DBs.
+    const lj = database.prepare(`SELECT id FROM brands WHERE name = 'Little Joys'`).get() as
+      | { id: number } | undefined;
+    if (lj) {
+      const cfg = database.prepare('SELECT brand_id FROM brand_redshift_config WHERE brand_id = ?').get(lj.id);
+      if (!cfg) {
+        database.prepare(
+          `INSERT INTO brand_redshift_config (brand_id, funnel_table, utm_source_list, utm_campaign_format, enabled)
+           VALUES (?, ?, ?, ?, 1)`
+        ).run(
+          lj.id,
+          'mw_nexus.lj_funnel_daily',
+          JSON.stringify(['google_Pmax', 'google_Search', 'google_DG', 'google_pla', 'google_Pmax_RM', 'google']),
+          'mixed'
+        );
+        database.prepare(`UPDATE brands SET rto_mode = 'redshift' WHERE id = ?`).run(lj.id);
+        console.log('[init] Migrated Little Joys to Redshift RTO mode');
+      }
+    }
+    return;
+  }
 
   const result = database.prepare(
     'INSERT INTO brands (name, rto_factor, rto_mode) VALUES (?, ?, ?)'
-  ).run('Little Joys', 0, 'flat');
+  ).run('Little Joys', 0, 'redshift');
+  const brandId = result.lastInsertRowid as number;
   database.prepare(
     'INSERT INTO brand_accounts (brand_id, customer_id, customer_name) VALUES (?, ?, ?)'
-  ).run(result.lastInsertRowid, '4812797582', 'Little Joys');
-  console.log('[init] Seeded default brand: Little Joys → 4812797582');
+  ).run(brandId, '4812797582', 'Little Joys');
+  database.prepare(
+    `INSERT INTO brand_redshift_config (brand_id, funnel_table, utm_source_list, utm_campaign_format, enabled)
+     VALUES (?, ?, ?, ?, 1)`
+  ).run(
+    brandId,
+    'mw_nexus.lj_funnel_daily',
+    JSON.stringify(['google_Pmax', 'google_Search', 'google_DG', 'google_pla', 'google_Pmax_RM', 'google']),
+    'mixed'
+  );
+  console.log('[init] Seeded Little Joys → 4812797582 with Redshift RTO mode (mw_nexus.lj_funnel_daily)');
 }

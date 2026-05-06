@@ -73,7 +73,13 @@ export const api = {
     if (params.campaign_id) qs.set('campaign_id', params.campaign_id);
     if (params.ad_group_id) qs.set('ad_group_id', params.ad_group_id);
     if (params.asset_group_id) qs.set('asset_group_id', params.asset_group_id);
-    return request<{ rows: PerfRow[] }>(`/api/${level}?${qs.toString()}`);
+    return request<{
+      rows: PerfRow[];
+      brand_redshift_totals?: {
+        primary?: { ncs: number; amount: number };
+        compare?: { ncs: number; amount: number };
+      };
+    }>(`/api/${level}?${qs.toString()}`);
   },
 
   assets: (params: {
@@ -234,6 +240,12 @@ export interface DerivedMetrics {
   roas_pre_rto: number;
   conversions_value_post_rto: number;
   roas_post_rto: number;
+  // Redshift-sourced (post-RTO from internal funnel)
+  ncs: number | null;
+  ncs_amount: number | null;
+  aov: number | null;
+  calc_cpa: number | null;
+  calc_roas: number | null;
 }
 
 export interface PerfRow {

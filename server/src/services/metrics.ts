@@ -25,11 +25,17 @@ export interface DerivedMetrics extends RawMetrics {
   ctr: number;          // clicks / impressions
   cpc: number;          // cost / clicks
   cpm: number;          // cost / impressions × 1000
-  cpa: number;          // cost / conversions
-  roas_pre_rto: number; // conversions_value / cost
+  cpa: number;          // cost / conversions  (Google reported)
+  roas_pre_rto: number; // conversions_value / cost  (Google reported, "Google ROAS")
   // Post-RTO fields populated by applyRto()
   conversions_value_post_rto: number;
   roas_post_rto: number;
+  // Redshift-sourced fields populated by attachRedshiftMetrics(); null if Redshift not joined for this row
+  ncs: number | null;            // new customers (post-RTO)
+  ncs_amount: number | null;     // converted_amount from funnel
+  aov: number | null;            // amount / ncs
+  calc_cpa: number | null;       // cost / ncs
+  calc_roas: number | null;      // amount / cost
 }
 
 export function deriveMetrics(raw: RawMetrics): DerivedMetrics {
@@ -49,6 +55,29 @@ export function deriveMetrics(raw: RawMetrics): DerivedMetrics {
     roas_pre_rto,
     conversions_value_post_rto: raw.conversions_value,
     roas_post_rto: roas_pre_rto,
+    ncs: null,
+    ncs_amount: null,
+    aov: null,
+    calc_cpa: null,
+    calc_roas: null,
+  };
+}
+
+/** Attach Redshift-sourced post-RTO fields (NCs, AOV, calc CPA, calc ROAS). */
+export function attachRedshiftMetrics(
+  m: DerivedMetrics,
+  rs: { ncs: number; amount: number }
+): DerivedMetrics {
+  return {
+    ...m,
+    ncs: rs.ncs,
+    ncs_amount: rs.amount,
+    aov: rs.ncs > 0 ? rs.amount / rs.ncs : 0,
+    calc_cpa: rs.ncs > 0 ? m.cost / rs.ncs : 0,
+    calc_roas: m.cost > 0 ? rs.amount / m.cost : 0,
+    // Also overwrite the post-RTO ROAS so KPI strip picks up Redshift truth automatically.
+    conversions_value_post_rto: rs.amount,
+    roas_post_rto: m.cost > 0 ? rs.amount / m.cost : 0,
   };
 }
 

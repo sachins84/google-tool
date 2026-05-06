@@ -13,13 +13,15 @@ interface Props {
   level: TableLevel;
   rows: PerfRow[];
   hasCompare: boolean;
+  showCalcMetrics?: boolean; // true when at least one row has Redshift NCs attached
   onDrillIn?: (row: PerfRow) => void;
   onAction?: (action: RowAction) => void;
 }
 
 type SortKey =
   | 'name' | 'cost' | 'impressions' | 'clicks' | 'ctr' | 'cpc' | 'cpm'
-  | 'conversions' | 'cpa' | 'roas_post_rto' | 'quality_score';
+  | 'conversions' | 'cpa' | 'roas_pre_rto' | 'roas_post_rto'
+  | 'ncs' | 'aov' | 'calc_cpa' | 'calc_roas' | 'quality_score';
 
 function nameOf(r: PerfRow, level: TableLevel): string {
   if (level === 'campaign') return r.campaign_name ?? '—';
@@ -30,7 +32,7 @@ function nameOf(r: PerfRow, level: TableLevel): string {
   return r.search_term ?? '—';
 }
 
-export function MetricsTable({ level, rows, hasCompare, onDrillIn, onAction }: Props) {
+export function MetricsTable({ level, rows, hasCompare, showCalcMetrics = false, onDrillIn, onAction }: Props) {
   const [sortBy, setSortBy] = useState<SortKey>('cost');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [filter, setFilter] = useState('');
@@ -117,7 +119,11 @@ export function MetricsTable({ level, rows, hasCompare, onDrillIn, onAction }: P
               {header('CPM', 'cpm', 'right')}
               {header('Conv', 'conversions', 'right')}
               {header('CPA', 'cpa', 'right')}
-              {header('ROAS (RTO)', 'roas_post_rto', 'right')}
+              {header('ROAS (G)', 'roas_pre_rto', 'right')}
+              {showCalcMetrics && header('NCs', 'ncs', 'right')}
+              {showCalcMetrics && header('AOV', 'aov', 'right')}
+              {showCalcMetrics && header('Calc CPA', 'calc_cpa', 'right')}
+              {showCalcMetrics && header('Calc ROAS', 'calc_roas', 'right')}
               {hasCompare && <th className="px-3 py-2 font-medium text-right text-gray-600">Δ Spend</th>}
               {hasCompare && <th className="px-3 py-2 font-medium text-right text-gray-600">Δ ROAS</th>}
               {onAction && <th className="px-3 py-2 font-medium text-right text-gray-600">Actions</th>}
@@ -168,7 +174,11 @@ export function MetricsTable({ level, rows, hasCompare, onDrillIn, onAction }: P
                   <td className="px-3 py-2 text-right">{fmtINR(m.cpm)}</td>
                   <td className="px-3 py-2 text-right">{fmtNum(m.conversions, 0)}</td>
                   <td className="px-3 py-2 text-right">{fmtINR(m.cpa)}</td>
-                  <td className="px-3 py-2 text-right font-medium">{fmtMul(m.roas_post_rto)}</td>
+                  <td className="px-3 py-2 text-right font-medium">{fmtMul(m.roas_pre_rto)}</td>
+                  {showCalcMetrics && <td className="px-3 py-2 text-right">{m.ncs != null ? fmtNum(m.ncs, 0) : '—'}</td>}
+                  {showCalcMetrics && <td className="px-3 py-2 text-right">{m.aov != null ? fmtINR(m.aov) : '—'}</td>}
+                  {showCalcMetrics && <td className="px-3 py-2 text-right">{m.calc_cpa != null ? fmtINR(m.calc_cpa) : '—'}</td>}
+                  {showCalcMetrics && <td className="px-3 py-2 text-right font-medium text-emerald-700">{m.calc_roas != null ? fmtMul(m.calc_roas) : '—'}</td>}
                   {hasCompare && (
                     <td className={`px-3 py-2 text-right ${deltaTone(m.cost, c?.cost, false)}`}>
                       {fmtDelta(m.cost, c?.cost, 'pct')}
