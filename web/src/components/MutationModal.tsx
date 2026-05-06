@@ -29,6 +29,7 @@ export function MutationModal({ brandId, action, onClose, onSuccess }: Props) {
         customer_id: r.customer_id,
         campaign_id: r.campaign_id,
         ad_group_id: r.ad_group_id,
+        asset_group_id: r.asset_group_id,
         ad_id: r.ad_id,
         criterion_id: r.criterion_id,
         dry_run: dryRun,

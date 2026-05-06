@@ -61,7 +61,7 @@ export const api = {
     request<{ ok: true }>(`/api/brands/${id}`, { method: 'DELETE' }),
 
   perf: (
-    level: 'campaigns' | 'ad-groups' | 'ads' | 'keywords' | 'search-terms',
+    level: 'campaigns' | 'ad-groups' | 'asset-groups' | 'ads' | 'keywords' | 'search-terms',
     params: PerfParams
   ) => {
     const qs = new URLSearchParams();
@@ -72,13 +72,15 @@ export const api = {
     if (params.compare_to) qs.set('compare_to', params.compare_to);
     if (params.campaign_id) qs.set('campaign_id', params.campaign_id);
     if (params.ad_group_id) qs.set('ad_group_id', params.ad_group_id);
+    if (params.asset_group_id) qs.set('asset_group_id', params.asset_group_id);
     return request<{ rows: PerfRow[] }>(`/api/${level}?${qs.toString()}`);
   },
 
-  assets: (params: { brand_id: number; campaign_id?: string }) => {
+  assets: (params: { brand_id: number; campaign_id?: string; asset_group_id?: string }) => {
     const qs = new URLSearchParams();
     qs.set('brand_id', String(params.brand_id));
     if (params.campaign_id) qs.set('campaign_id', params.campaign_id);
+    if (params.asset_group_id) qs.set('asset_group_id', params.asset_group_id);
     return request<{ rows: AssetRow[] }>(`/api/assets?${qs.toString()}`);
   },
 
@@ -129,11 +131,12 @@ export const ASSET_TEXT_LIMITS: Record<AssetTextFieldType, number> = {
 export type MutatePayload =
   | {
       action: 'pause' | 'enable';
-      level: 'campaign' | 'ad_group' | 'ad' | 'keyword';
+      level: 'campaign' | 'ad_group' | 'asset_group' | 'ad' | 'keyword';
       brand_id: number;
       customer_id: string;
       campaign_id?: string;
       ad_group_id?: string;
+      asset_group_id?: string;
       ad_id?: string;
       criterion_id?: string;
       dry_run: boolean;
@@ -205,6 +208,7 @@ export interface PerfParams {
   compare_to?: string;
   campaign_id?: string;
   ad_group_id?: string;
+  asset_group_id?: string;
 }
 
 export interface DerivedMetrics {
@@ -228,6 +232,11 @@ export interface PerfRow {
   campaign_name?: string;
   ad_group_id?: string;
   ad_group_name?: string;
+  asset_group_id?: string;
+  asset_group_name?: string;
+  ad_strength?: string;
+  path1?: string;
+  path2?: string;
   ad_id?: string;
   ad_name?: string;
   ad_type?: string;

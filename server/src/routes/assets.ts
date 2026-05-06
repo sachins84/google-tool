@@ -8,6 +8,7 @@ import { search } from '../services/google-ads.js';
 const querySchema = z.object({
   brand_id: z.coerce.number(),
   campaign_id: z.string().optional(),
+  asset_group_id: z.string().optional(),
 });
 
 interface RawAssetRow {
@@ -60,6 +61,7 @@ export async function assetRoutes(app: FastifyInstance): Promise<void> {
         from: '', // unused
         to: '',
         campaignIds: q.campaign_id ? [q.campaign_id] : undefined,
+        assetGroupIds: q.asset_group_id ? [q.asset_group_id] : undefined,
       });
 
       const perAccount = await Promise.all(

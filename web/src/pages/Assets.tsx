@@ -11,6 +11,7 @@ import { truncate } from '../lib/format';
 interface Props {
   brandId: number;
   campaignId?: string;
+  assetGroupId?: string;
 }
 
 type AssetActionKind = 'pause_asset' | 'enable_asset' | 'remove_asset';
@@ -33,7 +34,7 @@ const FIELD_TYPE_ORDER = [
   'YOUTUBE_VIDEO', 'CALL_TO_ACTION_SELECTION', 'SITELINK',
 ];
 
-export function Assets({ brandId, campaignId }: Props) {
+export function Assets({ brandId, campaignId, assetGroupId }: Props) {
   const [rows, setRows] = useState<AssetRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -48,12 +49,12 @@ export function Assets({ brandId, campaignId }: Props) {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    api.assets({ brand_id: brandId, campaign_id: campaignId })
+    api.assets({ brand_id: brandId, campaign_id: campaignId, asset_group_id: assetGroupId })
       .then((res) => { if (!cancelled) setRows(res.rows); })
       .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : String(err)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [brandId, campaignId, refreshTick]);
+  }, [brandId, campaignId, assetGroupId, refreshTick]);
 
   const filtered = useMemo(() => {
     return rows.filter((r) => {

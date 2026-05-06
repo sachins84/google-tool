@@ -14,28 +14,32 @@ interface Props {
   compareTo?: string;
 }
 
-type Tab = 'campaigns' | 'ad_groups' | 'ads' | 'keywords' | 'search_terms' | 'assets';
+type Tab = 'campaigns' | 'ad_groups' | 'asset_groups' | 'ads' | 'keywords' | 'search_terms' | 'assets';
 
 interface Drill {
   campaignId?: string;
   campaignName?: string;
-  campaignChannelType?: string; // captured at click time so we can hint to the user
+  campaignChannelType?: string;
   adGroupId?: string;
   adGroupName?: string;
+  assetGroupId?: string;
+  assetGroupName?: string;
 }
 
 const TAB_LABELS: Record<Tab, string> = {
   campaigns: 'Campaigns',
   ad_groups: 'Ad Groups',
+  asset_groups: 'Asset Groups',
   ads: 'Ads',
   keywords: 'Keywords',
   search_terms: 'Search Terms',
   assets: 'Assets',
 };
 
-const PATH_FOR_TAB: Record<Exclude<Tab, 'assets'>, 'campaigns' | 'ad-groups' | 'ads' | 'keywords' | 'search-terms'> = {
+const PATH_FOR_TAB: Record<Exclude<Tab, 'assets'>, 'campaigns' | 'ad-groups' | 'asset-groups' | 'ads' | 'keywords' | 'search-terms'> = {
   campaigns: 'campaigns',
   ad_groups: 'ad-groups',
+  asset_groups: 'asset-groups',
   ads: 'ads',
   keywords: 'keywords',
   search_terms: 'search-terms',
@@ -44,6 +48,7 @@ const PATH_FOR_TAB: Record<Exclude<Tab, 'assets'>, 'campaigns' | 'ad-groups' | '
 const LEVEL_FOR_TAB: Record<Exclude<Tab, 'assets'>, TableLevel> = {
   campaigns: 'campaign',
   ad_groups: 'ad_group',
+  asset_groups: 'asset_group',
   ads: 'ad',
   keywords: 'keyword',
   search_terms: 'search_term',
@@ -78,12 +83,13 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
         compare_to: compareTo,
         campaign_id: drill.campaignId,
         ad_group_id: drill.adGroupId,
+        asset_group_id: drill.assetGroupId,
       })
       .then((res) => { if (!cancelled) setRows(res.rows); })
       .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : String(err)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [brandId, from, to, compareFrom, compareTo, tab, drill.campaignId, drill.adGroupId, refreshTick, isAssetTab]);
+  }, [brandId, from, to, compareFrom, compareTo, tab, drill.campaignId, drill.adGroupId, drill.assetGroupId, refreshTick, isAssetTab]);
 
   const filteredRows = useMemo(() => applyFilters(rows, filter), [rows, filter]);
 
@@ -94,8 +100,8 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
       campaignName: row.campaign_name,
       campaignChannelType: row.channel_type,
     });
-    // PMax has no ad_groups — go straight to Assets tab
-    setTab(isPmax ? 'assets' : 'ad_groups');
+    // PMax → Asset Groups (intermediate level), other types → Ad Groups
+    setTab(isPmax ? 'asset_groups' : 'ad_groups');
   }
 
   function handleDrillFromAdGroup(row: PerfRow) {
@@ -109,12 +115,21 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
     setTab('ads');
   }
 
+  function handleDrillFromAssetGroup(row: PerfRow) {
+    setDrill({
+      ...drill,
+      assetGroupId: row.asset_group_id,
+      assetGroupName: row.asset_group_name,
+    });
+    setTab('assets');
+  }
+
   function handleAction(action: RowAction) {
     setPendingAction(action);
   }
 
   function selectTab(t: Tab) {
-    // Drill state is preserved across tab switches — clear only via the breadcrumb.
+    // Drill state preserved across tab switches — clear only via the breadcrumb.
     setTab(t);
   }
 
@@ -129,7 +144,32 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
       campaignName: d.campaignName,
       campaignChannelType: d.campaignChannelType,
     }));
-    setTab('ad_groups');
+    setTab(isPmaxDrill ? 'asset_groups' : 'ad_groups');
+  }
+
+  function clearAssetGroupDrill() {
+    setDrill((d) => ({
+      campaignId: d.campaignId,
+      campaignName: d.campaignName,
+      campaignChannelType: d.campaignChannelType,
+    }));
+    setTab('asset_groups');
+  }
+
+  // Tab-availability helper: PMax campaigns show {asset_groups, assets};
+  // non-PMax campaigns show {ad_groups, ads, keywords, search_terms}.
+  function isTabDisabled(t: Tab): { disabled: boolean; tip?: string } {
+    if (!drill.campaignId) {
+      // No drill yet — only Campaigns is meaningful (Assets is too, just shows everything)
+      return { disabled: false };
+    }
+    if (isPmaxDrill && (t === 'ad_groups' || t === 'ads' || t === 'keywords' || t === 'search_terms')) {
+      return { disabled: true, tip: 'Not applicable to Performance Max — use Asset Groups / Assets' };
+    }
+    if (drill.campaignChannelType && !isPmaxDrill && t === 'asset_groups') {
+      return { disabled: true, tip: `Asset Groups are PMax-only (this is ${drill.campaignChannelType.replace('_', ' ')})` };
+    }
+    return { disabled: false };
   }
 
   return (
@@ -139,8 +179,7 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
       <div className="border-b border-gray-200">
         <nav className="flex gap-6 overflow-x-auto">
           {(Object.keys(TAB_LABELS) as Tab[]).map((t) => {
-            // disable Ad Groups tab if drilled into a PMax campaign (it'll just be empty)
-            const disabled = t === 'ad_groups' && isPmaxDrill;
+            const { disabled, tip } = isTabDisabled(t);
             return (
               <button
                 key={t}
@@ -151,7 +190,7 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
                   : disabled ? 'border-transparent text-gray-300 cursor-not-allowed'
                   : 'border-transparent text-gray-500 hover:text-gray-700'
                 }`}
-                title={disabled ? 'PMax campaigns use Asset Groups — see Assets tab' : ''}
+                title={tip ?? ''}
               >
                 {TAB_LABELS[t]}
               </button>
@@ -160,14 +199,19 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
         </nav>
       </div>
 
-      {(drill.campaignName || drill.adGroupName) && (
+      {(drill.campaignName || drill.adGroupName || drill.assetGroupName) && (
         <div className="flex items-center gap-2 text-sm flex-wrap">
           <button onClick={clearDrill} className="text-blue-700 hover:underline">All campaigns</button>
           {drill.campaignName && (
             <>
               <span className="text-gray-400">›</span>
-              {drill.adGroupName ? (
-                <button onClick={clearAdGroupDrill} className="text-blue-700 hover:underline">{drill.campaignName}</button>
+              {drill.adGroupName || drill.assetGroupName ? (
+                <button
+                  onClick={drill.assetGroupName ? clearAssetGroupDrill : clearAdGroupDrill}
+                  className="text-blue-700 hover:underline"
+                >
+                  {drill.campaignName}
+                </button>
               ) : (
                 <span className="text-gray-700">{drill.campaignName}</span>
               )}
@@ -184,31 +228,35 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
               <span className="text-gray-700">{drill.adGroupName}</span>
             </>
           )}
+          {drill.assetGroupName && (
+            <>
+              <span className="text-gray-400">›</span>
+              <span className="text-gray-700">{drill.assetGroupName}</span>
+            </>
+          )}
 
-          {/* Cross-tab navigation: when drilled into a campaign or ad-group, let user
-              see the same scope at a different granularity in one click. */}
+          {/* Cross-tab "View:" buttons. Tabs shown depend on whether the drill is PMax or not. */}
           {drill.campaignId && (
             <div className="ml-auto flex items-center gap-1 text-xs">
               <span className="text-gray-500 mr-1">View:</span>
-              {!isPmaxDrill && (
-                <CrossTabButton active={tab === 'ad_groups'} onClick={() => setTab('ad_groups')}>Ad Groups</CrossTabButton>
+              {isPmaxDrill ? (
+                <>
+                  <CrossTabButton active={tab === 'asset_groups'} onClick={() => setTab('asset_groups')}>Asset Groups</CrossTabButton>
+                  <CrossTabButton active={tab === 'assets'} onClick={() => setTab('assets')}>Assets</CrossTabButton>
+                </>
+              ) : (
+                <>
+                  <CrossTabButton active={tab === 'ad_groups'} onClick={() => setTab('ad_groups')}>Ad Groups</CrossTabButton>
+                  <CrossTabButton active={tab === 'ads'} onClick={() => setTab('ads')}>Ads</CrossTabButton>
+                  <CrossTabButton active={tab === 'keywords'} onClick={() => setTab('keywords')}>Keywords</CrossTabButton>
+                  <CrossTabButton active={tab === 'search_terms'} onClick={() => setTab('search_terms')}>Search Terms</CrossTabButton>
+                </>
               )}
-              {!isPmaxDrill && (
-                <CrossTabButton active={tab === 'ads'} onClick={() => setTab('ads')}>Ads</CrossTabButton>
-              )}
-              {!isPmaxDrill && (
-                <CrossTabButton active={tab === 'keywords'} onClick={() => setTab('keywords')}>Keywords</CrossTabButton>
-              )}
-              {!isPmaxDrill && (
-                <CrossTabButton active={tab === 'search_terms'} onClick={() => setTab('search_terms')}>Search Terms</CrossTabButton>
-              )}
-              <CrossTabButton active={tab === 'assets'} onClick={() => setTab('assets')}>Assets</CrossTabButton>
             </div>
           )}
         </div>
       )}
 
-      {/* Filter bar — channel type only on Campaigns tab; status filter applies whenever rows have a status field */}
       {!isAssetTab && (
         <Filters
           state={filter}
@@ -221,11 +269,9 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
       {error && <div className="bg-red-50 border border-red-200 text-red-800 rounded p-3 text-sm">{error}</div>}
 
       {isAssetTab ? (
-        <Assets brandId={brandId} campaignId={drill.campaignId} />
+        <Assets brandId={brandId} campaignId={drill.campaignId} assetGroupId={drill.assetGroupId} />
       ) : loading ? (
         <div className="text-sm text-gray-500 py-8 text-center">Loading…</div>
-      ) : tab === 'ad_groups' && isPmaxDrill ? (
-        <PmaxNoAdGroups onSwitch={() => setTab('assets')} />
       ) : (
         <MetricsTable
           level={LEVEL_FOR_TAB[tab]}
@@ -234,6 +280,7 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
           onDrillIn={
             tab === 'campaigns' ? handleDrillFromCampaign
             : tab === 'ad_groups' ? handleDrillFromAdGroup
+            : tab === 'asset_groups' ? handleDrillFromAssetGroup
             : undefined
           }
           onAction={handleAction}
@@ -265,15 +312,5 @@ function CrossTabButton({ active, onClick, children }: { active: boolean; onClic
     >
       {children}
     </button>
-  );
-}
-
-function PmaxNoAdGroups({ onSwitch }: { onSwitch: () => void }) {
-  return (
-    <div className="bg-white rounded shadow border p-8 text-center text-sm">
-      <div className="text-gray-700 font-medium mb-1">PMax campaigns don't have ad groups</div>
-      <div className="text-gray-500 mb-3">Performance Max uses <strong>asset groups</strong> instead — bundles of headlines, descriptions, images and videos that Google's AI assembles into ads.</div>
-      <button onClick={onSwitch} className="text-blue-700 hover:underline text-sm">View Assets →</button>
-    </div>
   );
 }

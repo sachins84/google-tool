@@ -18,10 +18,11 @@ const baseSchema = z.object({
 
 const pauseEnableSchema = baseSchema.extend({
   action: z.enum(['pause', 'enable']),
-  level: z.enum(['campaign', 'ad_group', 'ad', 'keyword']),
-  // for campaign/ad_group: just the id. for ad: ad_group_id + ad_id. for keyword: ad_group_id + criterion_id
+  level: z.enum(['campaign', 'ad_group', 'asset_group', 'ad', 'keyword']),
+  // for campaign/ad_group/asset_group: just the id. for ad: ad_group_id + ad_id. for keyword: ad_group_id + criterion_id
   campaign_id: z.string().optional(),
   ad_group_id: z.string().optional(),
+  asset_group_id: z.string().optional(),
   ad_id: z.string().optional(),
   criterion_id: z.string().optional(),
 });
@@ -88,9 +89,9 @@ function pauseEnableStatus(action: 'pause' | 'enable'): 'PAUSED' | 'ENABLED' {
 
 function buildPauseEnableOps(
   customerId: string,
-  level: 'campaign' | 'ad_group' | 'ad' | 'keyword',
+  level: 'campaign' | 'ad_group' | 'asset_group' | 'ad' | 'keyword',
   status: 'PAUSED' | 'ENABLED',
-  ids: { campaign_id?: string; ad_group_id?: string; ad_id?: string; criterion_id?: string }
+  ids: { campaign_id?: string; ad_group_id?: string; asset_group_id?: string; ad_id?: string; criterion_id?: string }
 ): Array<Record<string, unknown>> {
   if (level === 'campaign') {
     if (!ids.campaign_id) throw new Error('campaign_id required');
@@ -106,6 +107,15 @@ function buildPauseEnableOps(
     return [{
       adGroupOperation: {
         update: { resourceName: `customers/${customerId}/adGroups/${ids.ad_group_id}`, status },
+        updateMask: 'status',
+      },
+    }];
+  }
+  if (level === 'asset_group') {
+    if (!ids.asset_group_id) throw new Error('asset_group_id required');
+    return [{
+      assetGroupOperation: {
+        update: { resourceName: `customers/${customerId}/assetGroups/${ids.asset_group_id}`, status },
         updateMask: 'status',
       },
     }];
@@ -167,6 +177,8 @@ export async function mutateRoutes(app: FastifyInstance): Promise<void> {
             ? `customers/${body.customer_id}/campaigns/${body.campaign_id}`
             : body.level === 'ad_group'
             ? `customers/${body.customer_id}/adGroups/${body.ad_group_id}`
+            : body.level === 'asset_group'
+            ? `customers/${body.customer_id}/assetGroups/${body.asset_group_id}`
             : body.level === 'ad'
             ? `customers/${body.customer_id}/adGroupAds/${body.ad_group_id}~${body.ad_id}`
             : `customers/${body.customer_id}/adGroupCriteria/${body.ad_group_id}~${body.criterion_id}`;

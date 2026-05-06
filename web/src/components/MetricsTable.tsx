@@ -2,10 +2,10 @@ import { useMemo, useState } from 'react';
 import type { PerfRow } from '../lib/api';
 import { deltaTone, fmtDelta, fmtINR, fmtMul, fmtNum, fmtPct, truncate } from '../lib/format';
 
-export type TableLevel = 'campaign' | 'ad_group' | 'ad' | 'keyword' | 'search_term';
+export type TableLevel = 'campaign' | 'ad_group' | 'asset_group' | 'ad' | 'keyword' | 'search_term';
 
 export type RowAction =
-  | { kind: 'pause' | 'enable'; level: 'campaign' | 'ad_group' | 'ad' | 'keyword'; row: PerfRow }
+  | { kind: 'pause' | 'enable'; level: 'campaign' | 'ad_group' | 'asset_group' | 'ad' | 'keyword'; row: PerfRow }
   | { kind: 'update_budget'; row: PerfRow }
   | { kind: 'add_negative'; row: PerfRow }; // for search terms
 
@@ -24,6 +24,7 @@ type SortKey =
 function nameOf(r: PerfRow, level: TableLevel): string {
   if (level === 'campaign') return r.campaign_name ?? '—';
   if (level === 'ad_group') return r.ad_group_name ?? '—';
+  if (level === 'asset_group') return r.asset_group_name ?? '—';
   if (level === 'ad') return r.ad_name || (r.headlines?.[0] ?? '—');
   if (level === 'keyword') return r.keyword_text ?? '—';
   return r.search_term ?? '—';
@@ -77,6 +78,7 @@ export function MetricsTable({ level, rows, hasCompare, onDrillIn, onAction }: P
   const titleCol =
     level === 'campaign' ? 'Campaign'
     : level === 'ad_group' ? 'Ad Group'
+    : level === 'asset_group' ? 'Asset Group'
     : level === 'ad' ? 'Ad'
     : level === 'keyword' ? 'Keyword'
     : 'Search Term';
@@ -100,6 +102,8 @@ export function MetricsTable({ level, rows, hasCompare, onDrillIn, onAction }: P
             <tr>
               {header(titleCol, 'name')}
               {level === 'campaign' && <th className="px-3 py-2 font-medium text-gray-600">Type</th>}
+              {level === 'asset_group' && <th className="px-3 py-2 font-medium text-gray-600">Strength</th>}
+              {level === 'asset_group' && <th className="px-3 py-2 font-medium text-gray-600">Theme</th>}
               {(level === 'keyword' || level === 'search_term') && (
                 <th className="px-3 py-2 font-medium text-gray-600">Match</th>
               )}
@@ -137,6 +141,16 @@ export function MetricsTable({ level, rows, hasCompare, onDrillIn, onAction }: P
                     )}
                   </td>
                   {level === 'campaign' && <td className="px-3 py-2 text-xs text-gray-600">{r.channel_type ?? '—'}</td>}
+                  {level === 'asset_group' && (
+                    <td className="px-3 py-2"><StrengthPill strength={r.ad_strength} /></td>
+                  )}
+                  {level === 'asset_group' && (
+                    <td className="px-3 py-2 text-xs text-gray-600 max-w-[200px] truncate" title={(r.final_urls ?? []).join(', ')}>
+                      {(r.path1 || r.path2)
+                        ? `/${r.path1 ?? ''}${r.path2 ? '/' + r.path2 : ''}`
+                        : (r.final_urls?.[0] ?? '—')}
+                    </td>
+                  )}
                   {(level === 'keyword' || level === 'search_term') && (
                     <td className="px-3 py-2 text-xs text-gray-600">{r.match_type ?? '—'}</td>
                   )}
@@ -175,7 +189,7 @@ export function MetricsTable({ level, rows, hasCompare, onDrillIn, onAction }: P
                       </button>
                       {openActionsFor === rowKey && (
                         <div className="absolute right-2 top-9 bg-white border rounded shadow-lg z-20 min-w-[180px] py-1 text-left">
-                          {(level === 'campaign' || level === 'ad_group' || level === 'ad' || level === 'keyword') && (
+                          {(level === 'campaign' || level === 'ad_group' || level === 'asset_group' || level === 'ad' || level === 'keyword') && (
                             <>
                               {r.status !== 'PAUSED' && (
                                 <ActionButton onClick={() => { setOpenActionsFor(null); onAction({ kind: 'pause', level: level as 'campaign' | 'ad_group' | 'ad' | 'keyword', row: r }); }}>
@@ -243,4 +257,18 @@ function StatusPill({ status }: { status?: string }) {
 function QsPill({ qs }: { qs: number }) {
   const tone = qs >= 7 ? 'bg-emerald-100 text-emerald-800' : qs >= 4 ? 'bg-amber-100 text-amber-800' : 'bg-red-100 text-red-800';
   return <span className={`inline-block px-2 py-0.5 rounded text-[11px] font-medium ${tone}`}>{qs}</span>;
+}
+
+function StrengthPill({ strength }: { strength?: string }) {
+  if (!strength) return <span className="text-gray-400">—</span>;
+  const s = strength.toUpperCase();
+  const tone =
+    s === 'EXCELLENT' ? 'bg-emerald-100 text-emerald-800'
+    : s === 'GOOD' ? 'bg-blue-100 text-blue-800'
+    : s === 'AVERAGE' ? 'bg-amber-100 text-amber-800'
+    : s === 'POOR' ? 'bg-red-100 text-red-800'
+    : s === 'NO_ADS' ? 'bg-red-200 text-red-900'
+    : 'bg-gray-100 text-gray-700';
+  const label = s === 'AD_STRENGTH_UNSPECIFIED' || s === 'UNKNOWN' ? '—' : s;
+  return <span className={`inline-block px-2 py-0.5 rounded text-[11px] font-medium ${tone}`}>{label}</span>;
 }

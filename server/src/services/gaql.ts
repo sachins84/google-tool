@@ -3,7 +3,7 @@
  * One source of truth for queries used by routes/campaigns, ad-groups, ads.
  */
 
-export type Level = 'campaign' | 'ad_group' | 'ad' | 'keyword' | 'search_term' | 'asset';
+export type Level = 'campaign' | 'ad_group' | 'asset_group' | 'ad' | 'keyword' | 'search_term' | 'asset';
 
 interface BuildOptions {
   level: Level;
@@ -11,6 +11,7 @@ interface BuildOptions {
   to: string;   // YYYY-MM-DD
   campaignIds?: string[];
   adGroupIds?: string[];
+  assetGroupIds?: string[];
 }
 
 const METRIC_FIELDS = [
@@ -46,6 +47,32 @@ export function buildCampaignsQuery(opts: BuildOptions): string {
   return `
     SELECT ${fields.join(', ')}
     FROM campaign
+    WHERE ${where.join(' AND ')}
+  `.trim();
+}
+
+export function buildAssetGroupsQuery(opts: BuildOptions): string {
+  // PMax-only. Returns asset_group rows with date-segmented metrics + ad_strength + URL parts.
+  const fields = [
+    'campaign.id',
+    'campaign.name',
+    'campaign.advertising_channel_type',
+    'asset_group.id',
+    'asset_group.name',
+    'asset_group.status',
+    'asset_group.ad_strength',
+    'asset_group.final_urls',
+    'asset_group.path1',
+    'asset_group.path2',
+    ...METRIC_FIELDS,
+  ];
+  const where = [dateClause(opts.from, opts.to), `asset_group.status != 'REMOVED'`];
+  if (opts.campaignIds?.length) where.push(`campaign.id IN ${inClause(opts.campaignIds)}`);
+  if (opts.assetGroupIds?.length) where.push(`asset_group.id IN ${inClause(opts.assetGroupIds)}`);
+
+  return `
+    SELECT ${fields.join(', ')}
+    FROM asset_group
     WHERE ${where.join(' AND ')}
   `.trim();
 }
@@ -168,6 +195,7 @@ export function buildAssetsQuery(opts: BuildOptions): string {
   // Hide removed asset-group links by default. Pause vs Enable is still surfaced.
   const where: string[] = [`asset_group_asset.status != 'REMOVED'`];
   if (opts.campaignIds?.length) where.push(`campaign.id IN ${inClause(opts.campaignIds)}`);
+  if (opts.assetGroupIds?.length) where.push(`asset_group.id IN ${inClause(opts.assetGroupIds)}`);
 
   return `
     SELECT ${fields.join(', ')}

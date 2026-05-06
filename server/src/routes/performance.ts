@@ -5,6 +5,7 @@ import { getBrand } from '../services/brands.js';
 import {
   buildCampaignsQuery,
   buildAdGroupsQuery,
+  buildAssetGroupsQuery,
   buildAdsQuery,
   buildKeywordsQuery,
   buildSearchTermsQuery,
@@ -29,6 +30,7 @@ const querySchema = z.object({
   compare_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   campaign_id: z.string().optional(),
   ad_group_id: z.string().optional(),
+  asset_group_id: z.string().optional(),
 });
 
 interface Row {
@@ -37,6 +39,11 @@ interface Row {
   campaign_name?: string;
   ad_group_id?: string;
   ad_group_name?: string;
+  asset_group_id?: string;
+  asset_group_name?: string;
+  ad_strength?: string;
+  path1?: string;
+  path2?: string;
   ad_id?: string;
   ad_name?: string;
   ad_type?: string;
@@ -63,6 +70,7 @@ const MICROS = 1_000_000;
 function pickRowKey(level: Level, raw: GoogleAdsRow): string {
   if (level === 'campaign') return `${raw.campaign?.id}`;
   if (level === 'ad_group') return `${raw.adGroup?.id}`;
+  if (level === 'asset_group') return `${raw.assetGroup?.id}`;
   if (level === 'ad') return `${raw.adGroupAd?.ad?.id}`;
   if (level === 'keyword') return `${raw.adGroup?.id}|${raw.adGroupCriterion?.criterionId}`;
   if (level === 'search_term') return `${raw.adGroup?.id}|${raw.searchTermView?.searchTerm}`;
@@ -111,6 +119,15 @@ interface GoogleAdsRow {
     searchTermMatchType?: string;
   };
   campaignBudget?: { amountMicros?: string };
+  assetGroup?: {
+    id?: string;
+    name?: string;
+    status?: string;
+    adStrength?: string;
+    finalUrls?: string[];
+    path1?: string;
+    path2?: string;
+  };
   metrics?: Record<string, unknown>;
 }
 
@@ -119,7 +136,8 @@ function buildQueryForLevel(
   from: string,
   to: string,
   campaignId?: string,
-  adGroupId?: string
+  adGroupId?: string,
+  assetGroupId?: string
 ): string {
   const opts = {
     level,
@@ -127,9 +145,11 @@ function buildQueryForLevel(
     to,
     campaignIds: campaignId ? [campaignId] : undefined,
     adGroupIds: adGroupId ? [adGroupId] : undefined,
+    assetGroupIds: assetGroupId ? [assetGroupId] : undefined,
   };
   if (level === 'campaign') return buildCampaignsQuery(opts);
   if (level === 'ad_group') return buildAdGroupsQuery(opts);
+  if (level === 'asset_group') return buildAssetGroupsQuery(opts);
   if (level === 'ad') return buildAdsQuery(opts);
   if (level === 'search_term') return buildSearchTermsQuery(opts);
   return buildKeywordsQuery(opts);
@@ -141,13 +161,14 @@ async function fetchRowsForBrand(
   from: string,
   to: string,
   campaignId?: string,
-  adGroupId?: string
+  adGroupId?: string,
+  assetGroupId?: string
 ): Promise<Row[]> {
   const brand = getBrand(brandId);
   if (!brand) throw new Error(`Brand ${brandId} not found`);
   if (!brand.accounts.length) return [];
 
-  const query = buildQueryForLevel(level, from, to, campaignId, adGroupId);
+  const query = buildQueryForLevel(level, from, to, campaignId, adGroupId, assetGroupId);
 
   // Fetch each linked customer in parallel.
   const perAccount = await Promise.all(
@@ -206,6 +227,16 @@ function shapeRow(level: Level, customerId: string, r: GoogleAdsRow): Row {
     base.status = r.adGroup?.status;
     if (r.adGroup?.cpcBidMicros) base.cpc_bid_inr = Number(r.adGroup.cpcBidMicros) / MICROS;
   }
+  if (level === 'asset_group') {
+    base.asset_group_id = r.assetGroup?.id;
+    base.asset_group_name = r.assetGroup?.name;
+    base.status = r.assetGroup?.status;
+    base.ad_strength = r.assetGroup?.adStrength;
+    base.path1 = r.assetGroup?.path1;
+    base.path2 = r.assetGroup?.path2;
+    base.final_urls = r.assetGroup?.finalUrls;
+    base.channel_type = r.campaign?.advertisingChannelType;
+  }
   if (level === 'ad') {
     base.ad_id = r.adGroupAd?.ad?.id;
     base.ad_name = r.adGroupAd?.ad?.name;
@@ -237,6 +268,7 @@ function shapeRow(level: Level, customerId: string, r: GoogleAdsRow): Row {
 function rowKey(level: Level, row: Row): string {
   if (level === 'campaign') return `${row.customer_id}|${row.campaign_id}`;
   if (level === 'ad_group') return `${row.customer_id}|${row.ad_group_id}`;
+  if (level === 'asset_group') return `${row.customer_id}|${row.asset_group_id}`;
   if (level === 'keyword') return `${row.customer_id}|${row.ad_group_id}|${row.criterion_id}`;
   if (level === 'search_term') return `${row.customer_id}|${row.ad_group_id}|${row.search_term}`;
   return `${row.customer_id}|${row.ad_id}`;
@@ -245,9 +277,10 @@ function rowKey(level: Level, row: Row): string {
 export async function performanceRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAuth);
 
-  for (const level of ['campaign', 'ad_group', 'ad', 'keyword', 'search_term'] as const) {
+  for (const level of ['campaign', 'ad_group', 'asset_group', 'ad', 'keyword', 'search_term'] as const) {
     const path = level === 'campaign' ? '/campaigns'
       : level === 'ad_group' ? '/ad-groups'
+      : level === 'asset_group' ? '/asset-groups'
       : level === 'ad' ? '/ads'
       : level === 'keyword' ? '/keywords'
       : '/search-terms';
@@ -259,12 +292,12 @@ export async function performanceRoutes(app: FastifyInstance): Promise<void> {
 
       try {
         const primary = await fetchRowsForBrand(
-          level, q.brand_id, q.from, q.to, q.campaign_id, q.ad_group_id
+          level, q.brand_id, q.from, q.to, q.campaign_id, q.ad_group_id, q.asset_group_id
         );
 
         if (q.compare_from && q.compare_to) {
           const compare = await fetchRowsForBrand(
-            level, q.brand_id, q.compare_from, q.compare_to, q.campaign_id, q.ad_group_id
+            level, q.brand_id, q.compare_from, q.compare_to, q.campaign_id, q.ad_group_id, q.asset_group_id
           );
           const compareByKey = new Map(compare.map((r) => [rowKey(level, r), r]));
           for (const r of primary) {
