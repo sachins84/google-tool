@@ -258,14 +258,18 @@ async function mergeRedshiftMetrics(rows: Row[], brandId: number, from: string, 
   try { utmSourceList = JSON.parse(cfg.utm_source_list ?? '[]'); } catch { /* ignore */ }
   if (utmSourceList.length === 0) return rows;
 
-  // Fetch Redshift NCs by utm_campaign + Google ad_id→campaign_id map in parallel.
-  // The map is needed because Search campaigns use {creative} macro in their tracking
-  // template, so utm_campaign holds the AD ID, not the campaign ID.
+  // Fetch Redshift NCs + Google indexes in parallel.
+  // ad_id map:           Search campaigns use {creative} → utm_campaign holds AD ID
+  // sku map:             Shopping campaigns use {product_id} → utm_campaign holds SKU
+  // asset_group_name map: PMax campaigns sometimes use the asset group name verbatim
+  //                       (e.g. 'Nutrimix-2', 'IBK') in their tracking template
   const brand = getBrand(brandId);
   const accountIds = brand?.accounts.map((a) => a.customer_id) ?? [];
-  const [rsRows, adIdToCampaignId] = await Promise.all([
+  const [rsRows, adIdToCampaignId, skuToCampaignId, agNameToCampaignId] = await Promise.all([
     fetchByCampaign({ funnelTable: cfg.funnel_table, utmSourceList, dateFrom: from, dateTo: to }),
     buildAdIdToCampaignIdMap(accountIds),
+    buildSkuToCampaignIdMap(accountIds, from, to),
+    buildAssetGroupNameToCampaignIdMap(accountIds, from, to),
   ]);
 
   // utm_campaign is sometimes the Google Ads campaign ID (e.g. "23223219977"),
@@ -292,26 +296,164 @@ async function mergeRedshiftMetrics(rows: Row[], brandId: number, from: string, 
   for (const r of rsRows) {
     const entry = { ncs: r.ncs, amount: r.amount };
     if (/^\d+$/.test(r.utm_campaign)) {
-      // numeric utm_campaign — could be either the campaign_id (PMax/DG)
-      // or an ad_id (Search uses {creative}). Resolve via ad-map to the parent campaign.
-      const resolvedCampaign = adIdToCampaignId.get(r.utm_campaign);
-      const target = resolvedCampaign ?? r.utm_campaign;
+      // numeric utm_campaign — campaign_id (PMax/DG) or ad_id (Search via {creative}).
+      const target = adIdToCampaignId.get(r.utm_campaign) ?? r.utm_campaign;
       add(byId, target, entry);
     } else {
-      add(byName, r.utm_campaign.toLowerCase(), entry);
-      add(byNormName, normalize(r.utm_campaign), entry);
+      // non-numeric — try SKU first (Shopping {product_id}), then asset_group_name
+      // (PMax tracking template), then fall back to campaign name fuzzy matching.
+      const lcKey = r.utm_campaign.toLowerCase();
+      const normKey = normalize(r.utm_campaign);
+      const skuTarget = skuToCampaignId.get(lcKey);
+      if (skuTarget) {
+        add(byId, skuTarget, entry);
+        continue;
+      }
+      const agTarget = agNameToCampaignId.get(lcKey) ?? agNameToCampaignId.get(normKey);
+      if (agTarget) {
+        add(byId, agTarget, entry);
+        continue;
+      }
+      add(byName, lcKey, entry);
+      add(byNormName, normKey, entry);
     }
   }
 
+  // In redshift mode, every row gets calc fields. Unmatched rows default to 0 NCs
+  // (i.e. the campaign exists in Google Ads but generated no NCs in this window
+  // — explicitly zero rather than ambiguous "—").
   return rows.map((row) => {
     let rs = row.campaign_id ? byId.get(row.campaign_id) : undefined;
     if (!rs && row.campaign_name) {
       rs = byName.get(row.campaign_name.toLowerCase())
         ?? byNormName.get(normalize(row.campaign_name));
     }
-    if (!rs) return row;
-    return { ...row, metrics: attachRedshiftMetrics(row.metrics, rs) };
+    return { ...row, metrics: attachRedshiftMetrics(row.metrics, rs ?? { ncs: 0, amount: 0 }) };
   });
+}
+
+/**
+ * Build an {asset_group_name (lowercase) → campaign_id} index for PMax asset groups
+ * in the given window. PMax tracking templates sometimes use the asset group name
+ * verbatim as utm_campaign (e.g. 'Nutrimix-2', 'IBK', 'MV') instead of the campaign ID.
+ *
+ * If the same asset_group_name appears in multiple campaigns, picks the highest-spend.
+ */
+async function buildAssetGroupNameToCampaignIdMap(
+  customerIds: string[],
+  from: string,
+  to: string
+): Promise<Map<string, string>> {
+  if (!customerIds.length) return new Map();
+  const query = `
+    SELECT campaign.id, asset_group.name, metrics.cost_micros
+    FROM asset_group
+    WHERE segments.date BETWEEN '${from}' AND '${to}'
+      AND asset_group.status != 'REMOVED'
+      AND metrics.cost_micros > 0
+  `.trim();
+  const perAccount = await Promise.all(
+    customerIds.map(async (cid) => {
+      try {
+        return await search<{
+          campaign?: { id?: string };
+          assetGroup?: { name?: string };
+          metrics?: { costMicros?: string };
+        }>({ customerId: cid, query });
+      } catch (err) {
+        console.error(`[ag-name-map] customer ${cid} failed:`, err instanceof Error ? err.message : String(err));
+        return [];
+      }
+    })
+  );
+  const nameToCampaignCosts = new Map<string, Map<string, number>>();
+  for (const rows of perAccount) {
+    for (const r of rows) {
+      const name = r.assetGroup?.name?.toLowerCase();
+      const cid = r.campaign?.id;
+      const cost = Number(r.metrics?.costMicros ?? 0);
+      if (!name || !cid) continue;
+      let inner = nameToCampaignCosts.get(name);
+      if (!inner) { inner = new Map(); nameToCampaignCosts.set(name, inner); }
+      inner.set(cid, (inner.get(cid) ?? 0) + cost);
+    }
+  }
+  // Index by both lowercase and alphanumeric-normalized name to catch tracking
+  // templates that use 'brain_gummies' for asset group 'Brain Gummies'.
+  const result = new Map<string, string>();
+  for (const [name, costs] of nameToCampaignCosts) {
+    let bestCid = '';
+    let bestCost = -1;
+    for (const [cid, cost] of costs) {
+      if (cost > bestCost) { bestCost = cost; bestCid = cid; }
+    }
+    if (bestCid) {
+      result.set(name, bestCid);
+      const normalized = name.toLowerCase().replace(/[^a-z0-9]+/g, '');
+      if (!result.has(normalized)) result.set(normalized, bestCid);
+    }
+  }
+  return result;
+}
+
+/**
+ * Build a {sku (lowercase) → campaign_id} index for products served by Shopping
+ * campaigns in the given window. Used to resolve utm_campaign values that are
+ * SKU codes (Shopping campaigns using the {product_id} macro).
+ *
+ * If a SKU runs in multiple Shopping campaigns, picks the highest-spend one
+ * deterministically (sufficient for v1; weighted attribution can come later).
+ */
+async function buildSkuToCampaignIdMap(
+  customerIds: string[],
+  from: string,
+  to: string
+): Promise<Map<string, string>> {
+  if (!customerIds.length) return new Map();
+  const query = `
+    SELECT campaign.id, campaign.advertising_channel_type, segments.product_item_id, metrics.cost_micros
+    FROM shopping_performance_view
+    WHERE segments.date BETWEEN '${from}' AND '${to}'
+      AND campaign.advertising_channel_type = 'SHOPPING'
+      AND metrics.cost_micros > 0
+  `.trim();
+  const perAccount = await Promise.all(
+    customerIds.map(async (cid) => {
+      try {
+        return await search<{
+          campaign?: { id?: string };
+          segments?: { productItemId?: string };
+          metrics?: { costMicros?: string };
+        }>({ customerId: cid, query });
+      } catch (err) {
+        console.error(`[sku-map] customer ${cid} failed:`, err instanceof Error ? err.message : String(err));
+        return [];
+      }
+    })
+  );
+  // (sku → { campaign_id → cost_micros }) → pick max
+  const skuToCampaignCosts = new Map<string, Map<string, number>>();
+  for (const rows of perAccount) {
+    for (const r of rows) {
+      const sku = r.segments?.productItemId?.toLowerCase();
+      const cid = r.campaign?.id;
+      const cost = Number(r.metrics?.costMicros ?? 0);
+      if (!sku || !cid) continue;
+      let inner = skuToCampaignCosts.get(sku);
+      if (!inner) { inner = new Map(); skuToCampaignCosts.set(sku, inner); }
+      inner.set(cid, (inner.get(cid) ?? 0) + cost);
+    }
+  }
+  const result = new Map<string, string>();
+  for (const [sku, costs] of skuToCampaignCosts) {
+    let bestCid = '';
+    let bestCost = -1;
+    for (const [cid, cost] of costs) {
+      if (cost > bestCost) { bestCost = cost; bestCid = cid; }
+    }
+    if (bestCid) result.set(sku, bestCid);
+  }
+  return result;
 }
 
 /**
