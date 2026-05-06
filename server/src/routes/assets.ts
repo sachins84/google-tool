@@ -4,6 +4,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { getBrand } from '../services/brands.js';
 import { buildAssetsQuery } from '../services/gaql.js';
 import { search } from '../services/google-ads.js';
+import { getLoginCustomerId } from '../services/mcc-map.js';
 import {
   addRaw,
   applyFlatRto,
@@ -81,7 +82,8 @@ export async function assetRoutes(app: FastifyInstance): Promise<void> {
       const perAccount = await Promise.all(
         brand.accounts.map(async (acc) => {
           try {
-            const raws = await search<RawAssetRow>({ customerId: acc.customer_id, query });
+            const loginCustomerId = (await getLoginCustomerId(acc.customer_id)) ?? undefined;
+            const raws = await search<RawAssetRow>({ customerId: acc.customer_id, loginCustomerId, query });
             // Date-segmented rows → aggregate by (asset_group_id, asset_id, field_type)
             const aggregated = new Map<string, { row: AssetRow; raw: RawMetrics }>();
             for (const r of raws) {

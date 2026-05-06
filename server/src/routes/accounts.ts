@@ -1,41 +1,29 @@
 import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../middleware/auth.js';
-import { getCustomerInfo, listAccessibleCustomers } from '../services/google-ads.js';
+import { clearMccMapCache, getAllAccounts } from '../services/mcc-map.js';
 
 export async function accountRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAuth);
 
-  // GET /api/accounts/accessible — list all customers our refresh token can see.
-  // Hydrates each with descriptive_name + currency + timezone for the Settings UI.
-  app.get('/accessible', async (_req, reply) => {
+  // GET /api/accounts/accessible — full list across all accessible MCCs
+  // Returns accounts with login_customer_id set when one is required for queries.
+  app.get('/accessible', async (req, reply) => {
     try {
-      const ids = await listAccessibleCustomers();
-      const enriched = await Promise.all(
-        ids.map(async (id) => {
-          try {
-            const info = await getCustomerInfo(id);
-            return {
-              customer_id: id,
-              descriptive_name: info?.descriptiveName ?? null,
-              currency_code: info?.currencyCode ?? null,
-              time_zone: info?.timeZone ?? null,
-              is_manager: info?.manager ?? false,
-            };
-          } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            app.log.warn({ customer_id: id, err: message }, 'hydrate failed');
-            return {
-              customer_id: id,
-              descriptive_name: null,
-              currency_code: null,
-              time_zone: null,
-              is_manager: false,
-              error: message,
-            };
-          }
-        })
-      );
-      return { accounts: enriched };
+      const force = (req.query as { refresh?: string } | undefined)?.refresh === '1';
+      if (force) clearMccMapCache();
+      const accounts = await getAllAccounts(force);
+      return {
+        accounts: accounts.map((a) => ({
+          customer_id: a.customer_id,
+          descriptive_name: a.descriptive_name ?? null,
+          currency_code: a.currency_code ?? null,
+          time_zone: a.time_zone ?? null,
+          is_manager: a.is_manager,
+          status: a.status,
+          login_customer_id: a.login_customer_id,
+          source: a.source,
+        })),
+      };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return reply.code(500).send({ error: message });

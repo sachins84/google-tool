@@ -4,6 +4,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { recordAudit } from '../services/audit-log.js';
 import { getBrand } from '../services/brands.js';
 import { getCampaignBudgetResource, mutate } from '../services/google-ads.js';
+import { getLoginCustomerId } from '../services/mcc-map.js';
 
 /**
  * Mutation router. All ops go through one POST /api/mutate endpoint with an `action` discriminator.
@@ -185,7 +186,8 @@ export async function mutateRoutes(app: FastifyInstance): Promise<void> {
         actionLabel = `${body.action}_${body.level}`;
         after = { status };
       } else if (body.action === 'update_budget') {
-        const budget = await getCampaignBudgetResource(body.customer_id, body.campaign_id);
+        const loginCustomerId = (await getLoginCustomerId(body.customer_id)) ?? undefined;
+        const budget = await getCampaignBudgetResource(body.customer_id, body.campaign_id, loginCustomerId);
         if (!budget) return reply.code(404).send({ error: 'Campaign budget not found' });
         before = { amount_inr: budget.amountMicros / MICROS };
         const newAmountMicros = Math.round(body.daily_budget_inr * MICROS);
@@ -279,7 +281,8 @@ export async function mutateRoutes(app: FastifyInstance): Promise<void> {
         after = { text: body.text, match_type: body.match_type };
       }
 
-      const response = await mutate(body.customer_id, operations, body.dry_run);
+      const loginCustomerId = (await getLoginCustomerId(body.customer_id)) ?? undefined;
+      const response = await mutate(body.customer_id, operations, body.dry_run, loginCustomerId);
 
       recordAudit({
         user_id: req.user?.id ?? null,

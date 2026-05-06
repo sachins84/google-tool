@@ -3,13 +3,15 @@ import { getAccessToken } from './token.js';
 
 const BASE = 'https://googleads.googleapis.com';
 
-async function authHeaders(): Promise<Record<string, string>> {
+async function authHeaders(loginCustomerId?: string): Promise<Record<string, string>> {
   const token = await getAccessToken();
-  return {
+  const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
     'developer-token': config.GOOGLE_ADS_DEVELOPER_TOKEN,
     'Content-Type': 'application/json',
   };
+  if (loginCustomerId) headers['login-customer-id'] = loginCustomerId;
+  return headers;
 }
 
 export async function listAccessibleCustomers(): Promise<string[]> {
@@ -23,6 +25,8 @@ export async function listAccessibleCustomers(): Promise<string[]> {
 export interface GaqlSearchOptions {
   customerId: string;
   query: string;
+  /** MCC to use as login-customer-id. Required for any account not directly granted to the OAuth user. */
+  loginCustomerId?: string;
 }
 
 export async function search<T = unknown>(opts: GaqlSearchOptions): Promise<T[]> {
@@ -36,7 +40,7 @@ export async function search<T = unknown>(opts: GaqlSearchOptions): Promise<T[]>
 
     const res = await fetch(url, {
       method: 'POST',
-      headers: await authHeaders(),
+      headers: await authHeaders(opts.loginCustomerId),
       body: JSON.stringify(body),
     });
     if (!res.ok) throw new Error(`search ${res.status}: ${await res.text()}`);
@@ -48,7 +52,7 @@ export async function search<T = unknown>(opts: GaqlSearchOptions): Promise<T[]>
   return results;
 }
 
-export async function getCustomerInfo(customerId: string): Promise<{
+export async function getCustomerInfo(customerId: string, loginCustomerId?: string): Promise<{
   id: string;
   descriptiveName?: string;
   currencyCode?: string;
@@ -57,9 +61,59 @@ export async function getCustomerInfo(customerId: string): Promise<{
 } | null> {
   const rows = await search<{ customer: { id: string; descriptiveName?: string; currencyCode?: string; timeZone?: string; manager?: boolean } }>({
     customerId,
+    loginCustomerId,
     query: 'SELECT customer.id, customer.descriptive_name, customer.currency_code, customer.time_zone, customer.manager FROM customer LIMIT 1',
   });
   return rows[0]?.customer ?? null;
+}
+
+export interface ChildCustomer {
+  id: string;
+  descriptiveName?: string;
+  currencyCode?: string;
+  timeZone?: string;
+  manager: boolean;
+  status: string;
+  level: number;
+}
+
+/**
+ * List all customers under a given MCC (manager) account, including the MCC itself.
+ * Requires login-customer-id to be set to the MCC.
+ */
+export async function listClientsUnderMcc(mccId: string): Promise<ChildCustomer[]> {
+  const rows = await search<{
+    customerClient?: {
+      id?: string;
+      descriptiveName?: string;
+      currencyCode?: string;
+      timeZone?: string;
+      manager?: boolean;
+      status?: string;
+      level?: number;
+    };
+  }>({
+    customerId: mccId,
+    loginCustomerId: mccId,
+    query: `
+      SELECT customer_client.id, customer_client.descriptive_name, customer_client.currency_code,
+             customer_client.time_zone, customer_client.manager, customer_client.status, customer_client.level
+      FROM customer_client
+      WHERE customer_client.status != 'CANCELED'
+    `.trim(),
+  });
+  return rows
+    .map((r) => r.customerClient)
+    .filter((c): c is NonNullable<typeof c> => !!c?.id)
+    .map((c) => ({
+      id: c.id!,
+      descriptiveName: c.descriptiveName,
+      currencyCode: c.currencyCode,
+      timeZone: c.timeZone,
+      manager: c.manager ?? false,
+      status: c.status ?? 'UNKNOWN',
+      level: c.level ?? 0,
+    }));
 }
 
 /**
@@ -69,12 +123,13 @@ export async function getCustomerInfo(customerId: string): Promise<{
 export async function mutate(
   customerId: string,
   operations: Array<Record<string, unknown>>,
-  validateOnly: boolean
+  validateOnly: boolean,
+  loginCustomerId?: string
 ): Promise<unknown> {
   const url = `${BASE}/${config.GOOGLE_ADS_API_VERSION}/customers/${customerId}/googleAds:mutate`;
   const res = await fetch(url, {
     method: 'POST',
-    headers: await authHeaders(),
+    headers: await authHeaders(loginCustomerId),
     body: JSON.stringify({
       mutateOperations: operations,
       validateOnly,
@@ -94,12 +149,14 @@ export async function mutate(
  */
 export async function getCampaignBudgetResource(
   customerId: string,
-  campaignId: string
+  campaignId: string,
+  loginCustomerId?: string
 ): Promise<{ resourceName: string; amountMicros: number } | null> {
   const rows = await search<{
     campaignBudget?: { resourceName?: string; amountMicros?: string };
   }>({
     customerId,
+    loginCustomerId,
     query: `SELECT campaign_budget.resource_name, campaign_budget.amount_micros
             FROM campaign WHERE campaign.id = ${campaignId} LIMIT 1`,
   });

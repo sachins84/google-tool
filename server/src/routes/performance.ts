@@ -24,6 +24,7 @@ import {
 } from '../services/metrics.js';
 import { fetchByCampaign, fetchTotal } from '../services/redshift.js';
 import { getDb } from '../db/init.js';
+import { getLoginCustomerId } from '../services/mcc-map.js';
 
 const querySchema = z.object({
   brand_id: z.coerce.number(),
@@ -177,10 +178,11 @@ async function fetchRowsForBrand(
 
   const query = buildQueryForLevel(level, from, to, campaignId, adGroupId, assetGroupId);
 
-  // Fetch each linked customer in parallel.
+  // Fetch each linked customer in parallel — using its MCC as login-customer-id where required.
   const perAccount = await Promise.all(
     brand.accounts.map(async (acc) => {
-      const rows = await search<GoogleAdsRow>({ customerId: acc.customer_id, query });
+      const loginCustomerId = (await getLoginCustomerId(acc.customer_id)) ?? undefined;
+      const rows = await search<GoogleAdsRow>({ customerId: acc.customer_id, loginCustomerId, query });
       return { customerId: acc.customer_id, rows };
     })
   );
@@ -455,11 +457,12 @@ async function buildAssetGroupNameToCampaignIdMap(
   const perAccount = await Promise.all(
     customerIds.map(async (cid) => {
       try {
+        const loginCustomerId = (await getLoginCustomerId(cid)) ?? undefined;
         return await search<{
           campaign?: { id?: string };
           assetGroup?: { name?: string };
           metrics?: { costMicros?: string };
-        }>({ customerId: cid, query });
+        }>({ customerId: cid, loginCustomerId, query });
       } catch (err) {
         console.error(`[ag-name-map] customer ${cid} failed:`, err instanceof Error ? err.message : String(err));
         return [];
@@ -520,11 +523,12 @@ async function buildSkuToCampaignIdMap(
   const perAccount = await Promise.all(
     customerIds.map(async (cid) => {
       try {
+        const loginCustomerId = (await getLoginCustomerId(cid)) ?? undefined;
         return await search<{
           campaign?: { id?: string };
           segments?: { productItemId?: string };
           metrics?: { costMicros?: string };
-        }>({ customerId: cid, query });
+        }>({ customerId: cid, loginCustomerId, query });
       } catch (err) {
         console.error(`[sku-map] customer ${cid} failed:`, err instanceof Error ? err.message : String(err));
         return [];
@@ -567,8 +571,10 @@ async function buildAdIdToCampaignIdMap(customerIds: string[]): Promise<Map<stri
   const perAccount = await Promise.all(
     customerIds.map(async (cid) => {
       try {
+        const loginCustomerId = (await getLoginCustomerId(cid)) ?? undefined;
         return await search<{ campaign?: { id?: string }; adGroupAd?: { ad?: { id?: string } } }>({
           customerId: cid,
+          loginCustomerId,
           query,
         });
       } catch {
