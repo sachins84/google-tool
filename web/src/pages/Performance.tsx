@@ -91,7 +91,10 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
     return () => { cancelled = true; };
   }, [brandId, from, to, compareFrom, compareTo, tab, drill.campaignId, drill.adGroupId, drill.assetGroupId, refreshTick, isAssetTab]);
 
-  const filteredRows = useMemo(() => applyFilters(rows, filter), [rows, filter]);
+  const filteredRows = useMemo(
+    () => applyFilters(rows, filter, { isSearchTerms: tab === 'search_terms' }),
+    [rows, filter, tab]
+  );
 
   function handleDrillFromCampaign(row: PerfRow) {
     const isPmax = row.channel_type === 'PERFORMANCE_MAX';
@@ -262,6 +265,7 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
           state={filter}
           onChange={setFilter}
           showChannelType={tab === 'campaigns'}
+          isSearchTerms={tab === 'search_terms'}
           rows={rows}
         />
       )}

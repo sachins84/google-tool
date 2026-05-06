@@ -249,7 +249,9 @@ function StatusPill({ status }: { status?: string }) {
     s === 'ENABLED' ? 'bg-emerald-100 text-emerald-800'
     : s === 'PAUSED' ? 'bg-amber-100 text-amber-800'
     : s === 'REMOVED' ? 'bg-gray-200 text-gray-600'
-    : s === 'ADDED' || s === 'NONE' ? 'bg-blue-100 text-blue-800'
+    : s === 'ADDED' ? 'bg-blue-100 text-blue-800'
+    : s === 'NONE' ? 'bg-gray-100 text-gray-700'
+    : s === 'EXCLUDED' ? 'bg-red-100 text-red-800'
     : 'bg-gray-100 text-gray-700';
   return <span className={`inline-block px-2 py-0.5 rounded text-[11px] font-medium ${color}`}>{s}</span>;
 }

@@ -2,8 +2,14 @@ import type { PerfRow } from '../lib/api';
 
 export type StatusFilter = 'enabled' | 'paused' | 'all';
 
+// Search-term status is unrelated to enabled/paused — it tracks whether the term
+// has been added as a keyword/negative. Filter values: 'none' = show only queries
+// that haven't been actioned (most actionable). 'all' = show everything.
+export type SearchTermStatusFilter = 'none' | 'added' | 'excluded' | 'all';
+
 export interface FilterState {
   status: StatusFilter;
+  searchTermStatus: SearchTermStatusFilter;
   channelTypes: Set<string>; // empty = all
   hideZeroSpend: boolean;
 }
@@ -22,10 +28,11 @@ interface Props {
   state: FilterState;
   onChange: (s: FilterState) => void;
   showChannelType: boolean;
+  isSearchTerms?: boolean; // search terms use a different status concept
   rows: PerfRow[]; // used to count available channel types
 }
 
-export function Filters({ state, onChange, showChannelType, rows }: Props) {
+export function Filters({ state, onChange, showChannelType, isSearchTerms = false, rows }: Props) {
   const presentTypes = new Set<string>();
   for (const r of rows) if (r.channel_type) presentTypes.add(r.channel_type);
 
@@ -38,18 +45,43 @@ export function Filters({ state, onChange, showChannelType, rows }: Props) {
 
   return (
     <div className="flex items-center gap-3 flex-wrap text-sm">
-      <span className="text-xs text-gray-500">Status:</span>
-      {(['enabled', 'paused', 'all'] as StatusFilter[]).map((s) => (
-        <button
-          key={s}
-          onClick={() => onChange({ ...state, status: s })}
-          className={`px-2.5 py-1 rounded text-xs ${
-            state.status === s ? 'bg-black text-white' : 'bg-gray-100 hover:bg-gray-200'
-          }`}
-        >
-          {s === 'enabled' ? 'Active' : s === 'paused' ? 'Paused' : 'All'}
-        </button>
-      ))}
+      {isSearchTerms ? (
+        <>
+          <span className="text-xs text-gray-500">Status:</span>
+          {(['none', 'added', 'excluded', 'all'] as SearchTermStatusFilter[]).map((s) => (
+            <button
+              key={s}
+              onClick={() => onChange({ ...state, searchTermStatus: s })}
+              className={`px-2.5 py-1 rounded text-xs ${
+                state.searchTermStatus === s ? 'bg-black text-white' : 'bg-gray-100 hover:bg-gray-200'
+              }`}
+              title={
+                s === 'none' ? 'Queries you haven\'t actioned yet — most actionable'
+                : s === 'added' ? 'Already added as a keyword'
+                : s === 'excluded' ? 'Already added as a negative keyword'
+                : 'Show all queries'
+              }
+            >
+              {s === 'none' ? 'Unactioned' : s === 'added' ? 'Added as KW' : s === 'excluded' ? 'Added as Negative' : 'All'}
+            </button>
+          ))}
+        </>
+      ) : (
+        <>
+          <span className="text-xs text-gray-500">Status:</span>
+          {(['enabled', 'paused', 'all'] as StatusFilter[]).map((s) => (
+            <button
+              key={s}
+              onClick={() => onChange({ ...state, status: s })}
+              className={`px-2.5 py-1 rounded text-xs ${
+                state.status === s ? 'bg-black text-white' : 'bg-gray-100 hover:bg-gray-200'
+              }`}
+            >
+              {s === 'enabled' ? 'Active' : s === 'paused' ? 'Paused' : 'All'}
+            </button>
+          ))}
+        </>
+      )}
 
       {showChannelType && presentTypes.size > 0 && (
         <>
@@ -93,14 +125,34 @@ export function Filters({ state, onChange, showChannelType, rows }: Props) {
 }
 
 export function defaultFilterState(): FilterState {
-  return { status: 'enabled', channelTypes: new Set(), hideZeroSpend: true };
+  return {
+    status: 'enabled',
+    searchTermStatus: 'none', // most actionable by default
+    channelTypes: new Set(),
+    hideZeroSpend: true,
+  };
 }
 
-export function applyFilters(rows: PerfRow[], f: FilterState): PerfRow[] {
+export function applyFilters(
+  rows: PerfRow[],
+  f: FilterState,
+  options: { isSearchTerms?: boolean } = {}
+): PerfRow[] {
   return rows.filter((r) => {
-    if (f.status !== 'all') {
-      const want = f.status === 'enabled' ? 'ENABLED' : 'PAUSED';
-      if ((r.status ?? '').toUpperCase() !== want) return false;
+    if (options.isSearchTerms) {
+      // Search-term statuses: NONE / ADDED / EXCLUDED (UNKNOWN sometimes too).
+      if (f.searchTermStatus !== 'all') {
+        const s = (r.status ?? '').toUpperCase();
+        const want = f.searchTermStatus.toUpperCase();
+        // Treat missing/UNKNOWN as NONE (Google reports unactioned terms either way).
+        const effective = !s || s === 'UNKNOWN' ? 'NONE' : s;
+        if (effective !== want) return false;
+      }
+    } else {
+      if (f.status !== 'all') {
+        const want = f.status === 'enabled' ? 'ENABLED' : 'PAUSED';
+        if ((r.status ?? '').toUpperCase() !== want) return false;
+      }
     }
     if (f.channelTypes.size > 0 && r.channel_type && !f.channelTypes.has(r.channel_type)) {
       return false;
