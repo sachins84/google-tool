@@ -7,6 +7,9 @@ import { authRoutes } from './routes/auth.js';
 import { accountRoutes } from './routes/accounts.js';
 import { brandRoutes } from './routes/brands.js';
 import { performanceRoutes } from './routes/performance.js';
+import { assetRoutes } from './routes/assets.js';
+import { mutateRoutes } from './routes/mutate.js';
+import { auditRoutes } from './routes/audit.js';
 
 async function main(): Promise<void> {
   initDatabase();
@@ -27,6 +30,9 @@ async function main(): Promise<void> {
   await app.register(accountRoutes, { prefix: '/api/accounts' });
   await app.register(brandRoutes, { prefix: '/api/brands' });
   await app.register(performanceRoutes, { prefix: '/api' });
+  await app.register(assetRoutes, { prefix: '/api/assets' });
+  await app.register(mutateRoutes, { prefix: '/api/mutate' });
+  await app.register(auditRoutes, { prefix: '/api/audit' });
 
   await app.listen({ port: config.PORT, host: '0.0.0.0' });
   console.log(`[server] listening on http://localhost:${config.PORT}`);

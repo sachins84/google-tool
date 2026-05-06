@@ -61,7 +61,7 @@ export const api = {
     request<{ ok: true }>(`/api/brands/${id}`, { method: 'DELETE' }),
 
   perf: (
-    level: 'campaigns' | 'ad-groups' | 'ads',
+    level: 'campaigns' | 'ad-groups' | 'ads' | 'keywords' | 'search-terms',
     params: PerfParams
   ) => {
     const qs = new URLSearchParams();
@@ -74,7 +74,88 @@ export const api = {
     if (params.ad_group_id) qs.set('ad_group_id', params.ad_group_id);
     return request<{ rows: PerfRow[] }>(`/api/${level}?${qs.toString()}`);
   },
+
+  assets: (params: { brand_id: number; campaign_id?: string }) => {
+    const qs = new URLSearchParams();
+    qs.set('brand_id', String(params.brand_id));
+    if (params.campaign_id) qs.set('campaign_id', params.campaign_id);
+    return request<{ rows: AssetRow[] }>(`/api/assets?${qs.toString()}`);
+  },
+
+  mutate: (body: MutatePayload) =>
+    request<{ ok: true; dry_run: boolean; response: unknown }>('/api/mutate', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  audit: (params: { brand_id?: number; limit?: number } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.brand_id) qs.set('brand_id', String(params.brand_id));
+    qs.set('limit', String(params.limit ?? 100));
+    return request<{ entries: AuditEntry[] }>(`/api/audit?${qs.toString()}`);
+  },
 };
+
+export interface AssetRow {
+  customer_id: string;
+  campaign_id?: string;
+  campaign_name?: string;
+  asset_group_id?: string;
+  asset_group_name?: string;
+  asset_id?: string;
+  asset_type?: string;
+  field_type?: string;
+  performance_label?: string;
+  text?: string;
+  image_url?: string;
+  youtube_video_id?: string;
+}
+
+export type MutatePayload =
+  | {
+      action: 'pause' | 'enable';
+      level: 'campaign' | 'ad_group' | 'ad' | 'keyword';
+      brand_id: number;
+      customer_id: string;
+      campaign_id?: string;
+      ad_group_id?: string;
+      ad_id?: string;
+      criterion_id?: string;
+      dry_run: boolean;
+    }
+  | {
+      action: 'update_budget';
+      brand_id: number;
+      customer_id: string;
+      campaign_id: string;
+      daily_budget_inr: number;
+      dry_run: boolean;
+    }
+  | {
+      action: 'add_negative_keyword';
+      scope: 'campaign' | 'ad_group';
+      brand_id: number;
+      customer_id: string;
+      campaign_id?: string;
+      ad_group_id?: string;
+      text: string;
+      match_type: 'EXACT' | 'PHRASE' | 'BROAD';
+      dry_run: boolean;
+    };
+
+export interface AuditEntry {
+  id: number;
+  username: string | null;
+  action: string;
+  brand_name: string | null;
+  customer_id: string | null;
+  target_resource: string | null;
+  before: unknown;
+  after: unknown;
+  dry_run: boolean;
+  response: unknown;
+  created_at: number;
+}
 
 export interface BrandPayload {
   name: string;
@@ -124,6 +205,13 @@ export interface PerfRow {
   headlines?: string[];
   descriptions?: string[];
   final_urls?: string[];
+  // keyword
+  criterion_id?: string;
+  keyword_text?: string;
+  match_type?: string;
+  quality_score?: number;
+  // search term
+  search_term?: string;
   metrics: DerivedMetrics;
   comparison?: DerivedMetrics;
 }

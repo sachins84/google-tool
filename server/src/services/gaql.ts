@@ -3,7 +3,7 @@
  * One source of truth for queries used by routes/campaigns, ad-groups, ads.
  */
 
-export type Level = 'campaign' | 'ad_group' | 'ad' | 'keyword';
+export type Level = 'campaign' | 'ad_group' | 'ad' | 'keyword' | 'search_term' | 'asset';
 
 interface BuildOptions {
   level: Level;
@@ -123,5 +123,54 @@ export function buildKeywordsQuery(opts: BuildOptions): string {
     SELECT ${fields.join(', ')}
     FROM keyword_view
     WHERE ${where.join(' AND ')}
+  `.trim();
+}
+
+export function buildSearchTermsQuery(opts: BuildOptions): string {
+  const fields = [
+    'campaign.id',
+    'campaign.name',
+    'ad_group.id',
+    'ad_group.name',
+    'search_term_view.search_term',
+    'search_term_view.status',
+    'segments.search_term_match_type',
+    ...METRIC_FIELDS,
+  ];
+  const where = [dateClause(opts.from, opts.to)];
+  if (opts.campaignIds?.length) where.push(`campaign.id IN ${inClause(opts.campaignIds)}`);
+  if (opts.adGroupIds?.length) where.push(`ad_group.id IN ${inClause(opts.adGroupIds)}`);
+
+  return `
+    SELECT ${fields.join(', ')}
+    FROM search_term_view
+    WHERE ${where.join(' AND ')}
+  `.trim();
+}
+
+export function buildAssetsQuery(opts: BuildOptions): string {
+  // PMax assets: asset_group_asset_view returns assets within asset groups with performance labels.
+  // Note: metrics on this view are limited at the asset level — returning structural fields only here.
+  const fields = [
+    'campaign.id',
+    'campaign.name',
+    'asset_group.id',
+    'asset_group.name',
+    'asset_group_asset.field_type',
+    'asset_group_asset.performance_label',
+    'asset.id',
+    'asset.type',
+    'asset.text_asset.text',
+    'asset.image_asset.full_size.url',
+    'asset.youtube_video_asset.youtube_video_id',
+  ];
+  const where: string[] = [];
+  if (opts.campaignIds?.length) where.push(`campaign.id IN ${inClause(opts.campaignIds)}`);
+
+  const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  return `
+    SELECT ${fields.join(', ')}
+    FROM asset_group_asset
+    ${whereClause}
   `.trim();
 }

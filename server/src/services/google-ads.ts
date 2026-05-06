@@ -61,3 +61,49 @@ export async function getCustomerInfo(customerId: string): Promise<{
   });
   return rows[0]?.customer ?? null;
 }
+
+/**
+ * Calls the googleAds:mutate endpoint with the given operations.
+ * If validateOnly is true, Google returns errors without committing.
+ */
+export async function mutate(
+  customerId: string,
+  operations: Array<Record<string, unknown>>,
+  validateOnly: boolean
+): Promise<unknown> {
+  const url = `${BASE}/${config.GOOGLE_ADS_API_VERSION}/customers/${customerId}/googleAds:mutate`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: await authHeaders(),
+    body: JSON.stringify({
+      mutateOperations: operations,
+      validateOnly,
+      partialFailure: false,
+    }),
+  });
+  const json = await res.json();
+  if (!res.ok) {
+    const message = JSON.stringify(json).slice(0, 1000);
+    throw new Error(`mutate ${res.status}: ${message}`);
+  }
+  return json;
+}
+
+/**
+ * Look up the campaign_budget resource_name for a given campaign — needed to update budget.
+ */
+export async function getCampaignBudgetResource(
+  customerId: string,
+  campaignId: string
+): Promise<{ resourceName: string; amountMicros: number } | null> {
+  const rows = await search<{
+    campaignBudget?: { resourceName?: string; amountMicros?: string };
+  }>({
+    customerId,
+    query: `SELECT campaign_budget.resource_name, campaign_budget.amount_micros
+            FROM campaign WHERE campaign.id = ${campaignId} LIMIT 1`,
+  });
+  const b = rows[0]?.campaignBudget;
+  if (!b?.resourceName) return null;
+  return { resourceName: b.resourceName, amountMicros: Number(b.amountMicros ?? 0) };
+}

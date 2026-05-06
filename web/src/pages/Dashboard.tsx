@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { Header, type DashState } from '../components/Header';
+import { Header, type DashState, type View } from '../components/Header';
 import { Performance } from './Performance';
 import { Settings } from './Settings';
+import { Audit } from './Audit';
 
 interface Props {
   username: string;
@@ -9,7 +10,7 @@ interface Props {
 }
 
 export function Dashboard({ username, onLogout }: Props) {
-  const [view, setView] = useState<'performance' | 'settings'>('performance');
+  const [view, setView] = useState<View>('performance');
   const [state, setState] = useState<DashState>({
     brandId: null,
     from: '',
@@ -30,6 +31,8 @@ export function Dashboard({ username, onLogout }: Props) {
       <main className="max-w-7xl mx-auto px-4 py-6">
         {view === 'settings' ? (
           <Settings />
+        ) : view === 'audit' ? (
+          <Audit />
         ) : state.brandId && state.from && state.to ? (
           <Performance
             brandId={state.brandId}

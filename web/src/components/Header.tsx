@@ -10,12 +10,14 @@ export interface DashState {
   compareTo?: string;
 }
 
+export type View = 'performance' | 'settings' | 'audit';
+
 interface Props {
   username: string;
-  view: 'performance' | 'settings';
+  view: View;
   state: DashState;
   onState: (s: DashState) => void;
-  onView: (v: 'performance' | 'settings') => void;
+  onView: (v: View) => void;
   onLogout: () => void;
 }
 
@@ -128,6 +130,12 @@ export function Header({ username, view, state, onState, onView, onLogout }: Pro
             className={`px-3 py-1.5 rounded ${view === 'performance' ? 'bg-black text-white' : 'hover:bg-gray-100'}`}
           >
             Dashboard
+          </button>
+          <button
+            onClick={() => onView('audit')}
+            className={`px-3 py-1.5 rounded ${view === 'audit' ? 'bg-black text-white' : 'hover:bg-gray-100'}`}
+          >
+            Audit Log
           </button>
           <button
             onClick={() => onView('settings')}

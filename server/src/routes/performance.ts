@@ -7,6 +7,7 @@ import {
   buildAdGroupsQuery,
   buildAdsQuery,
   buildKeywordsQuery,
+  buildSearchTermsQuery,
   type Level,
 } from '../services/gaql.js';
 import { search } from '../services/google-ads.js';
@@ -47,6 +48,12 @@ interface Row {
   headlines?: string[];
   descriptions?: string[];
   final_urls?: string[];
+  // keyword / search_term fields
+  criterion_id?: string;
+  keyword_text?: string;
+  match_type?: string;
+  quality_score?: number;
+  search_term?: string;
   metrics: DerivedMetrics;
   comparison?: DerivedMetrics;
 }
@@ -57,6 +64,8 @@ function pickRowKey(level: Level, raw: GoogleAdsRow): string {
   if (level === 'campaign') return `${raw.campaign?.id}`;
   if (level === 'ad_group') return `${raw.adGroup?.id}`;
   if (level === 'ad') return `${raw.adGroupAd?.ad?.id}`;
+  if (level === 'keyword') return `${raw.adGroup?.id}|${raw.adGroupCriterion?.criterionId}`;
+  if (level === 'search_term') return `${raw.adGroup?.id}|${raw.searchTermView?.searchTerm}`;
   return `${raw.adGroupCriterion?.criterionId}`;
 }
 
@@ -94,6 +103,13 @@ interface GoogleAdsRow {
     keyword?: { text?: string; matchType?: string };
     qualityInfo?: { qualityScore?: number };
   };
+  searchTermView?: {
+    searchTerm?: string;
+    status?: string;
+  };
+  segments?: {
+    searchTermMatchType?: string;
+  };
   campaignBudget?: { amountMicros?: string };
   metrics?: Record<string, unknown>;
 }
@@ -115,6 +131,7 @@ function buildQueryForLevel(
   if (level === 'campaign') return buildCampaignsQuery(opts);
   if (level === 'ad_group') return buildAdGroupsQuery(opts);
   if (level === 'ad') return buildAdsQuery(opts);
+  if (level === 'search_term') return buildSearchTermsQuery(opts);
   return buildKeywordsQuery(opts);
 }
 
@@ -203,8 +220,16 @@ function shapeRow(level: Level, customerId: string, r: GoogleAdsRow): Row {
     base.final_urls = r.adGroupAd?.ad?.finalUrls ?? [];
   }
   if (level === 'keyword') {
-    base.ad_id = r.adGroupCriterion?.criterionId; // reuse ad_id slot for criterion id at keyword level
+    base.criterion_id = r.adGroupCriterion?.criterionId;
+    base.keyword_text = r.adGroupCriterion?.keyword?.text;
+    base.match_type = r.adGroupCriterion?.keyword?.matchType;
     base.status = r.adGroupCriterion?.status;
+    base.quality_score = r.adGroupCriterion?.qualityInfo?.qualityScore;
+  }
+  if (level === 'search_term') {
+    base.search_term = r.searchTermView?.searchTerm;
+    base.status = r.searchTermView?.status;
+    base.match_type = r.segments?.searchTermMatchType;
   }
   return base;
 }
@@ -212,16 +237,20 @@ function shapeRow(level: Level, customerId: string, r: GoogleAdsRow): Row {
 function rowKey(level: Level, row: Row): string {
   if (level === 'campaign') return `${row.customer_id}|${row.campaign_id}`;
   if (level === 'ad_group') return `${row.customer_id}|${row.ad_group_id}`;
+  if (level === 'keyword') return `${row.customer_id}|${row.ad_group_id}|${row.criterion_id}`;
+  if (level === 'search_term') return `${row.customer_id}|${row.ad_group_id}|${row.search_term}`;
   return `${row.customer_id}|${row.ad_id}`;
 }
 
 export async function performanceRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAuth);
 
-  for (const level of ['campaign', 'ad_group', 'ad'] as const) {
+  for (const level of ['campaign', 'ad_group', 'ad', 'keyword', 'search_term'] as const) {
     const path = level === 'campaign' ? '/campaigns'
       : level === 'ad_group' ? '/ad-groups'
-      : '/ads';
+      : level === 'ad' ? '/ads'
+      : level === 'keyword' ? '/keywords'
+      : '/search-terms';
 
     app.get(path, async (req, reply) => {
       const parsed = querySchema.safeParse(req.query);
