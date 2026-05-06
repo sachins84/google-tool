@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Header, type DashState, type View } from '../components/Header';
 import { Performance } from './Performance';
 import { Settings } from './Settings';
 import { Audit } from './Audit';
+import { api } from '../lib/api';
 
 interface Props {
   username: string;
@@ -16,6 +17,28 @@ export function Dashboard({ username, onLogout }: Props) {
     from: '',
     to: '',
   });
+  const [brands, setBrands] = useState<Array<{ id: number; name: string }>>([]);
+
+  // Brands list is owned here so Settings can refresh it after CRUD and the
+  // Header dropdown stays in sync without a page reload.
+  const refreshBrands = useCallback(async () => {
+    try {
+      const res = await api.brandsList();
+      const list = res.brands.map((b) => ({ id: b.id, name: b.name }));
+      setBrands(list);
+      // If currently-selected brand was deleted, fall back to first available.
+      setState((s) => {
+        if (s.brandId != null && !list.some((b) => b.id === s.brandId)) {
+          return { ...s, brandId: list[0]?.id ?? null };
+        }
+        return s;
+      });
+    } catch {
+      /* ignore — Header will retry on next mount */
+    }
+  }, []);
+
+  useEffect(() => { void refreshBrands(); }, [refreshBrands]);
 
   return (
     <div className="min-h-full">
@@ -23,6 +46,7 @@ export function Dashboard({ username, onLogout }: Props) {
         username={username}
         view={view}
         state={state}
+        brands={brands}
         onState={setState}
         onView={setView}
         onLogout={onLogout}
@@ -30,7 +54,7 @@ export function Dashboard({ username, onLogout }: Props) {
 
       <main className="max-w-7xl mx-auto px-4 py-6">
         {view === 'settings' ? (
-          <Settings />
+          <Settings onBrandsChanged={refreshBrands} />
         ) : view === 'audit' ? (
           <Audit />
         ) : state.brandId && state.from && state.to ? (

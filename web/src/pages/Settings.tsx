@@ -16,7 +16,12 @@ interface Brand {
   accounts: Array<{ customer_id: string; customer_name: string | null }>;
 }
 
-export function Settings() {
+interface Props {
+  /** Notifies the dashboard shell to refresh the brand picker dropdown. */
+  onBrandsChanged?: () => void | Promise<void>;
+}
+
+export function Settings({ onBrandsChanged }: Props) {
   const [brands, setBrands] = useState<Brand[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [loading, setLoading] = useState(true);
@@ -47,6 +52,7 @@ export function Settings() {
       setEditing(null);
       setCreating(false);
       await refresh();
+      await onBrandsChanged?.();
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
     }
@@ -57,6 +63,7 @@ export function Settings() {
     try {
       await api.brandDelete(id);
       await refresh();
+      await onBrandsChanged?.();
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
     }

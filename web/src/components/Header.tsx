@@ -16,26 +16,23 @@ interface Props {
   username: string;
   view: View;
   state: DashState;
+  brands: Array<{ id: number; name: string }>;
   onState: (s: DashState) => void;
   onView: (v: View) => void;
   onLogout: () => void;
 }
 
-export function Header({ username, view, state, onState, onView, onLogout }: Props) {
-  const [brands, setBrands] = useState<Array<{ id: number; name: string }>>([]);
+export function Header({ username, view, state, brands, onState, onView, onLogout }: Props) {
   const [preset, setPreset] = useState<Preset>('last_7');
   const [compareOn, setCompareOn] = useState(true);
 
+  // Bootstrap default brand selection once brands are loaded.
   useEffect(() => {
-    void api.brandsList().then((b) => {
-      const list = b.brands.map((br) => ({ id: br.id, name: br.name }));
-      setBrands(list);
-      if (state.brandId == null && list[0]) {
-        const r = rangeForPreset('last_7');
-        onState({ brandId: list[0].id, from: r.from, to: r.to, compareFrom: r.compareFrom, compareTo: r.compareTo });
-      }
-    });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    if (state.brandId == null && brands[0]) {
+      const r = rangeForPreset('last_7');
+      onState({ brandId: brands[0].id, from: r.from, to: r.to, compareFrom: r.compareFrom, compareTo: r.compareTo });
+    }
+  }, [brands, state.brandId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function applyPreset(p: Preset) {
     setPreset(p);
