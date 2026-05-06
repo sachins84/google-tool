@@ -17,6 +17,8 @@ export function MutationModal({ brandId, action, onClose, onSuccess }: Props) {
   const [budgetInr, setBudgetInr] = useState<number>(action.kind === 'update_budget' ? Math.round(action.row.daily_budget_inr ?? 0) : 0);
   const [negText, setNegText] = useState<string>(action.kind === 'add_negative' ? action.row.search_term ?? '' : '');
   const [negMatch, setNegMatch] = useState<'EXACT' | 'PHRASE' | 'BROAD'>('PHRASE');
+  const [kwText, setKwText] = useState('');
+  const [kwMatch, setKwMatch] = useState<'EXACT' | 'PHRASE' | 'BROAD'>('BROAD');
 
   function buildPayload(dryRun: boolean): MutatePayload | null {
     const r = action.row;
@@ -43,6 +45,18 @@ export function MutationModal({ brandId, action, onClose, onSuccess }: Props) {
         customer_id: r.customer_id,
         campaign_id: r.campaign_id,
         daily_budget_inr: budgetInr,
+        dry_run: dryRun,
+      };
+    }
+    if (action.kind === 'add_keyword') {
+      if (!r.ad_group_id) return null;
+      return {
+        action: 'add_keyword',
+        brand_id: brandId,
+        customer_id: r.customer_id,
+        ad_group_id: r.ad_group_id,
+        text: kwText,
+        match_type: kwMatch,
         dry_run: dryRun,
       };
     }
@@ -95,6 +109,7 @@ export function MutationModal({ brandId, action, onClose, onSuccess }: Props) {
     if (action.kind === 'pause') return `Pause ${action.level}`;
     if (action.kind === 'enable') return `Enable ${action.level}`;
     if (action.kind === 'update_budget') return `Update budget — ${r.campaign_name ?? r.campaign_id}`;
+    if (action.kind === 'add_keyword') return `Add keyword to ${r.ad_group_name ?? 'ad group'}`;
     return `Add as negative keyword`;
   }
 
@@ -152,6 +167,37 @@ export function MutationModal({ brandId, action, onClose, onSuccess }: Props) {
               </div>
               <p className="text-xs text-gray-500">
                 Will be added at the campaign level (inherits to all ad groups).
+              </p>
+            </>
+          )}
+
+          {action.kind === 'add_keyword' && (
+            <>
+              <div>
+                <label className="block text-xs font-medium mb-1 text-gray-700">Keyword text</label>
+                <input
+                  type="text"
+                  value={kwText}
+                  onChange={(e) => setKwText(e.target.value)}
+                  className="w-full border rounded px-3 py-1.5"
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-1 text-gray-700">Match type</label>
+                <select
+                  value={kwMatch}
+                  onChange={(e) => setKwMatch(e.target.value as 'EXACT' | 'PHRASE' | 'BROAD')}
+                  className="w-full border rounded px-3 py-1.5"
+                >
+                  <option value="BROAD">BROAD (most accounts only allow this for new keywords)</option>
+                  <option value="PHRASE">PHRASE</option>
+                  <option value="EXACT">EXACT</option>
+                </select>
+              </div>
+              <p className="text-xs text-gray-500">
+                Adding to ad group <strong>{action.row.ad_group_name ?? action.row.ad_group_id}</strong>.
+                Google may reject EXACT/PHRASE for new keywords on some accounts — defaults to BROAD.
               </p>
             </>
           )}

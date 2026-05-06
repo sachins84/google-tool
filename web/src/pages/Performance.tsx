@@ -280,13 +280,33 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
       )}
 
       {!isAssetTab && (
-        <Filters
-          state={filter}
-          onChange={setFilter}
-          showChannelType={tab === 'campaigns'}
-          isSearchTerms={tab === 'search_terms'}
-          rows={rows}
-        />
+        <div className="flex items-center justify-between gap-3">
+          <Filters
+            state={filter}
+            onChange={setFilter}
+            showChannelType={tab === 'campaigns'}
+            isSearchTerms={tab === 'search_terms'}
+            rows={rows}
+          />
+          {tab === 'keywords' && drill.adGroupId && (
+            <button
+              onClick={() => setPendingAction({
+                kind: 'add_keyword',
+                row: {
+                  customer_id: rows[0]?.customer_id ?? '',
+                  campaign_id: drill.campaignId,
+                  campaign_name: drill.campaignName,
+                  ad_group_id: drill.adGroupId,
+                  ad_group_name: drill.adGroupName,
+                  metrics: rows[0]?.metrics ?? {} as PerfRow['metrics'],
+                } as PerfRow,
+              })}
+              className="text-sm bg-black text-white px-3 py-1.5 rounded hover:opacity-90 whitespace-nowrap"
+            >
+              + Add keyword
+            </button>
+          )}
+        </div>
       )}
 
       {error && <div className="bg-red-50 border border-red-200 text-red-800 rounded p-3 text-sm">{error}</div>}

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import bcrypt from 'bcryptjs';
 import { config, dbPath } from '../config.js';
+import { getBrandPreset } from '../config/brand-presets.js';
 
 let db: Database.Database | null = null;
 
@@ -205,8 +206,36 @@ export function initDatabase(): Database.Database {
 
   bootstrapAdmin(db);
   bootstrapDefaultBrand(db);
+  applyBrandPresetsToExistingBrands(db);
 
   return db;
+}
+
+/**
+ * Migration: walk all existing brands and (re)apply preset configs by name.
+ * Idempotent — runs every server start. Lets users add a "Man Matters" brand
+ * via Settings UI before the preset existed and still get auto-config.
+ */
+function applyBrandPresetsToExistingBrands(database: Database.Database): void {
+  const brands = database.prepare('SELECT id, name, rto_mode FROM brands').all() as Array<{
+    id: number; name: string; rto_mode: string;
+  }>;
+  for (const b of brands) {
+    const preset = getBrandPreset(b.name);
+    if (!preset) continue;
+    database.prepare(
+      `INSERT INTO brand_redshift_config (brand_id, funnel_table, utm_source_list, utm_campaign_format, enabled)
+       VALUES (?, ?, ?, 'mixed', 1)
+       ON CONFLICT(brand_id) DO UPDATE SET
+         funnel_table = excluded.funnel_table,
+         utm_source_list = excluded.utm_source_list,
+         enabled = 1`
+    ).run(b.id, preset.funnel_table, JSON.stringify(preset.utm_source_list));
+    if (b.rto_mode === 'flat') {
+      database.prepare(`UPDATE brands SET rto_mode = 'redshift' WHERE id = ?`).run(b.id);
+      console.log(`[init] Auto-flipped ${b.name} → redshift mode (matched preset)`);
+    }
+  }
 }
 
 function bootstrapAdmin(database: Database.Database): void {

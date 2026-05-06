@@ -43,6 +43,13 @@ const negativeKwSchema = baseSchema.extend({
   match_type: z.enum(['EXACT', 'PHRASE', 'BROAD']).default('BROAD'),
 });
 
+const positiveKwSchema = baseSchema.extend({
+  action: z.literal('add_keyword'),
+  ad_group_id: z.string(),
+  text: z.string().min(1),
+  match_type: z.enum(['EXACT', 'PHRASE', 'BROAD']).default('BROAD'),
+});
+
 // PMax asset operations — text assets are immutable, so "modify" = remove + add
 const ASSET_FIELD_TYPES = [
   'HEADLINE', 'LONG_HEADLINE', 'DESCRIPTION', 'BUSINESS_NAME',
@@ -76,6 +83,7 @@ const requestSchema = z.discriminatedUnion('action', [
   pauseEnableSchema.extend({ action: z.literal('enable') }),
   budgetSchema,
   negativeKwSchema,
+  positiveKwSchema,
   assetStatusSchema.extend({ action: z.literal('pause_asset') }),
   assetStatusSchema.extend({ action: z.literal('enable_asset') }),
   assetStatusSchema.extend({ action: z.literal('remove_asset') }),
@@ -250,6 +258,18 @@ export async function mutateRoutes(app: FastifyInstance): Promise<void> {
         ];
         actionLabel = `add_text_asset_${body.field_type.toLowerCase()}`;
         after = { field_type: body.field_type, text: body.text };
+      } else if (body.action === 'add_keyword') {
+        target = `customers/${body.customer_id}/adGroups/${body.ad_group_id}`;
+        operations = [{
+          adGroupCriterionOperation: {
+            create: {
+              adGroup: target,
+              keyword: { text: body.text, matchType: body.match_type },
+            },
+          },
+        }];
+        actionLabel = 'add_keyword';
+        after = { text: body.text, match_type: body.match_type };
       } else {
         // add_negative_keyword
         if (body.scope === 'campaign') {

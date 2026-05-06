@@ -7,7 +7,8 @@ export type TableLevel = 'campaign' | 'ad_group' | 'asset_group' | 'ad' | 'keywo
 export type RowAction =
   | { kind: 'pause' | 'enable'; level: 'campaign' | 'ad_group' | 'asset_group' | 'ad' | 'keyword'; row: PerfRow }
   | { kind: 'update_budget'; row: PerfRow }
-  | { kind: 'add_negative'; row: PerfRow }; // for search terms
+  | { kind: 'add_negative'; row: PerfRow } // for search terms
+  | { kind: 'add_keyword'; row: PerfRow }; // synthesized from drill state, not from a real row
 
 interface Props {
   level: TableLevel;

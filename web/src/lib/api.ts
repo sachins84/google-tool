@@ -177,6 +177,15 @@ export type MutatePayload =
       dry_run: boolean;
     }
   | {
+      action: 'add_keyword';
+      brand_id: number;
+      customer_id: string;
+      ad_group_id: string;
+      text: string;
+      match_type: 'EXACT' | 'PHRASE' | 'BROAD';
+      dry_run: boolean;
+    }
+  | {
       action: 'pause_asset' | 'enable_asset' | 'remove_asset';
       brand_id: number;
       customer_id: string;
