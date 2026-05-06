@@ -16,6 +16,7 @@ interface RawAssetRow {
   assetGroupAsset?: {
     fieldType?: string;
     performanceLabel?: string;
+    status?: string;
   };
   asset?: {
     id?: string;
@@ -36,6 +37,7 @@ interface AssetRow {
   asset_type?: string;
   field_type?: string;
   performance_label?: string;
+  status?: string;
   text?: string;
   image_url?: string;
   youtube_video_id?: string;
@@ -74,6 +76,7 @@ export async function assetRoutes(app: FastifyInstance): Promise<void> {
               asset_type: r.asset?.type,
               field_type: r.assetGroupAsset?.fieldType,
               performance_label: r.assetGroupAsset?.performanceLabel,
+              status: r.assetGroupAsset?.status,
               text: r.asset?.textAsset?.text,
               image_url: r.asset?.imageAsset?.fullSize?.url,
               youtube_video_id: r.asset?.youtubeVideoAsset?.youtubeVideoId,

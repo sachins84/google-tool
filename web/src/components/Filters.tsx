@@ -5,6 +5,7 @@ export type StatusFilter = 'enabled' | 'paused' | 'all';
 export interface FilterState {
   status: StatusFilter;
   channelTypes: Set<string>; // empty = all
+  hideZeroSpend: boolean;
 }
 
 const ALL_CHANNEL_TYPES = [
@@ -78,12 +79,21 @@ export function Filters({ state, onChange, showChannelType, rows }: Props) {
           )}
         </>
       )}
+
+      <label className="flex items-center gap-1 text-xs text-gray-700 ml-3">
+        <input
+          type="checkbox"
+          checked={state.hideZeroSpend}
+          onChange={(e) => onChange({ ...state, hideZeroSpend: e.target.checked })}
+        />
+        Hide zero-spend
+      </label>
     </div>
   );
 }
 
 export function defaultFilterState(): FilterState {
-  return { status: 'enabled', channelTypes: new Set() };
+  return { status: 'enabled', channelTypes: new Set(), hideZeroSpend: true };
 }
 
 export function applyFilters(rows: PerfRow[], f: FilterState): PerfRow[] {
@@ -93,6 +103,9 @@ export function applyFilters(rows: PerfRow[], f: FilterState): PerfRow[] {
       if ((r.status ?? '').toUpperCase() !== want) return false;
     }
     if (f.channelTypes.size > 0 && r.channel_type && !f.channelTypes.has(r.channel_type)) {
+      return false;
+    }
+    if (f.hideZeroSpend && (r.metrics?.cost ?? 0) <= 0) {
       return false;
     }
     return true;

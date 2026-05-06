@@ -106,10 +106,25 @@ export interface AssetRow {
   asset_type?: string;
   field_type?: string;
   performance_label?: string;
+  status?: string;
   text?: string;
   image_url?: string;
   youtube_video_id?: string;
 }
+
+export type AssetFieldType =
+  | 'HEADLINE' | 'LONG_HEADLINE' | 'DESCRIPTION' | 'BUSINESS_NAME'
+  | 'CALL_TO_ACTION_SELECTION' | 'MARKETING_IMAGE' | 'SQUARE_MARKETING_IMAGE'
+  | 'PORTRAIT_MARKETING_IMAGE' | 'LOGO' | 'LANDSCAPE_LOGO' | 'YOUTUBE_VIDEO';
+
+export type AssetTextFieldType = 'HEADLINE' | 'LONG_HEADLINE' | 'DESCRIPTION' | 'BUSINESS_NAME';
+
+export const ASSET_TEXT_LIMITS: Record<AssetTextFieldType, number> = {
+  HEADLINE: 30,
+  LONG_HEADLINE: 90,
+  DESCRIPTION: 90,
+  BUSINESS_NAME: 25,
+};
 
 export type MutatePayload =
   | {
@@ -140,6 +155,24 @@ export type MutatePayload =
       ad_group_id?: string;
       text: string;
       match_type: 'EXACT' | 'PHRASE' | 'BROAD';
+      dry_run: boolean;
+    }
+  | {
+      action: 'pause_asset' | 'enable_asset' | 'remove_asset';
+      brand_id: number;
+      customer_id: string;
+      asset_group_id: string;
+      asset_id: string;
+      field_type: AssetFieldType;
+      dry_run: boolean;
+    }
+  | {
+      action: 'add_text_asset';
+      brand_id: number;
+      customer_id: string;
+      asset_group_id: string;
+      field_type: AssetTextFieldType;
+      text: string;
       dry_run: boolean;
     };
 

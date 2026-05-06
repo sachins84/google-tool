@@ -41,11 +41,43 @@ const negativeKwSchema = baseSchema.extend({
   match_type: z.enum(['EXACT', 'PHRASE', 'BROAD']).default('BROAD'),
 });
 
+// PMax asset operations — text assets are immutable, so "modify" = remove + add
+const ASSET_FIELD_TYPES = [
+  'HEADLINE', 'LONG_HEADLINE', 'DESCRIPTION', 'BUSINESS_NAME',
+  'CALL_TO_ACTION_SELECTION', 'MARKETING_IMAGE', 'SQUARE_MARKETING_IMAGE',
+  'PORTRAIT_MARKETING_IMAGE', 'LOGO', 'LANDSCAPE_LOGO', 'YOUTUBE_VIDEO',
+] as const;
+
+const assetStatusSchema = baseSchema.extend({
+  action: z.enum(['pause_asset', 'enable_asset', 'remove_asset']),
+  asset_group_id: z.string(),
+  asset_id: z.string(),
+  field_type: z.enum(ASSET_FIELD_TYPES),
+});
+
+const TEXT_ASSET_LIMITS: Record<string, number> = {
+  HEADLINE: 30,
+  LONG_HEADLINE: 90,
+  DESCRIPTION: 90,
+  BUSINESS_NAME: 25,
+};
+
+const addTextAssetSchema = baseSchema.extend({
+  action: z.literal('add_text_asset'),
+  asset_group_id: z.string(),
+  field_type: z.enum(['HEADLINE', 'LONG_HEADLINE', 'DESCRIPTION', 'BUSINESS_NAME']),
+  text: z.string().min(1).max(90),
+});
+
 const requestSchema = z.discriminatedUnion('action', [
   pauseEnableSchema.extend({ action: z.literal('pause') }),
   pauseEnableSchema.extend({ action: z.literal('enable') }),
   budgetSchema,
   negativeKwSchema,
+  assetStatusSchema.extend({ action: z.literal('pause_asset') }),
+  assetStatusSchema.extend({ action: z.literal('enable_asset') }),
+  assetStatusSchema.extend({ action: z.literal('remove_asset') }),
+  addTextAssetSchema,
 ]);
 
 const MICROS = 1_000_000;
@@ -153,6 +185,57 @@ export async function mutateRoutes(app: FastifyInstance): Promise<void> {
           },
         }];
         target = budget.resourceName;
+      } else if (body.action === 'pause_asset' || body.action === 'enable_asset') {
+        const status = body.action === 'pause_asset' ? 'PAUSED' : 'ENABLED';
+        target = `customers/${body.customer_id}/assetGroupAssets/${body.asset_group_id}~${body.asset_id}~${body.field_type}`;
+        operations = [{
+          assetGroupAssetOperation: {
+            update: { resourceName: target, status },
+            updateMask: 'status',
+          },
+        }];
+        actionLabel = body.action;
+        before = { status: body.action === 'pause_asset' ? 'ENABLED' : 'PAUSED' };
+        after = { status };
+      } else if (body.action === 'remove_asset') {
+        target = `customers/${body.customer_id}/assetGroupAssets/${body.asset_group_id}~${body.asset_id}~${body.field_type}`;
+        operations = [{
+          assetGroupAssetOperation: { remove: target },
+        }];
+        actionLabel = 'remove_asset';
+        after = { removed: true };
+      } else if (body.action === 'add_text_asset') {
+        const limit = TEXT_ASSET_LIMITS[body.field_type];
+        if (limit && body.text.length > limit) {
+          return reply.code(400).send({
+            error: `${body.field_type} exceeds ${limit}-character limit (got ${body.text.length})`,
+          });
+        }
+        // Two-op batch with temp resource name. Google Ads accepts negative IDs as
+        // placeholders that resolve to the actual asset created in op 1.
+        const tempAssetResource = `customers/${body.customer_id}/assets/-1`;
+        target = `customers/${body.customer_id}/assetGroups/${body.asset_group_id}`;
+        operations = [
+          {
+            assetOperation: {
+              create: {
+                resourceName: tempAssetResource,
+                textAsset: { text: body.text },
+              },
+            },
+          },
+          {
+            assetGroupAssetOperation: {
+              create: {
+                assetGroup: target,
+                asset: tempAssetResource,
+                fieldType: body.field_type,
+              },
+            },
+          },
+        ];
+        actionLabel = `add_text_asset_${body.field_type.toLowerCase()}`;
+        after = { field_type: body.field_type, text: body.text };
       } else {
         // add_negative_keyword
         if (body.scope === 'campaign') {

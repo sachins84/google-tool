@@ -158,19 +158,20 @@ export function buildAssetsQuery(opts: BuildOptions): string {
     'asset_group.name',
     'asset_group_asset.field_type',
     'asset_group_asset.performance_label',
+    'asset_group_asset.status',
     'asset.id',
     'asset.type',
     'asset.text_asset.text',
     'asset.image_asset.full_size.url',
     'asset.youtube_video_asset.youtube_video_id',
   ];
-  const where: string[] = [];
+  // Hide removed asset-group links by default. Pause vs Enable is still surfaced.
+  const where: string[] = [`asset_group_asset.status != 'REMOVED'`];
   if (opts.campaignIds?.length) where.push(`campaign.id IN ${inClause(opts.campaignIds)}`);
 
-  const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
   return `
     SELECT ${fields.join(', ')}
     FROM asset_group_asset
-    ${whereClause}
+    WHERE ${where.join(' AND ')}
   `.trim();
 }
