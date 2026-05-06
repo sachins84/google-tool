@@ -269,7 +269,13 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
       {error && <div className="bg-red-50 border border-red-200 text-red-800 rounded p-3 text-sm">{error}</div>}
 
       {isAssetTab ? (
-        <Assets brandId={brandId} campaignId={drill.campaignId} assetGroupId={drill.assetGroupId} />
+        <Assets
+          brandId={brandId}
+          from={from}
+          to={to}
+          campaignId={drill.campaignId}
+          assetGroupId={drill.assetGroupId}
+        />
       ) : loading ? (
         <div className="text-sm text-gray-500 py-8 text-center">Loading…</div>
       ) : (

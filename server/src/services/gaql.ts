@@ -176,11 +176,13 @@ export function buildSearchTermsQuery(opts: BuildOptions): string {
 }
 
 export function buildAssetsQuery(opts: BuildOptions): string {
-  // PMax assets: asset_group_asset_view returns assets within asset groups with performance labels.
-  // Note: metrics on this view are limited at the asset level — returning structural fields only here.
+  // asset_group_asset returns assets within asset groups with performance labels + metrics.
+  // For PMax the metrics will be zero (Google attributes at asset_group level due to AI
+  // composition); for non-PMax channels they may be populated.
   const fields = [
     'campaign.id',
     'campaign.name',
+    'campaign.advertising_channel_type',
     'asset_group.id',
     'asset_group.name',
     'asset_group_asset.field_type',
@@ -191,9 +193,11 @@ export function buildAssetsQuery(opts: BuildOptions): string {
     'asset.text_asset.text',
     'asset.image_asset.full_size.url',
     'asset.youtube_video_asset.youtube_video_id',
+    ...METRIC_FIELDS,
   ];
-  // Hide removed asset-group links by default. Pause vs Enable is still surfaced.
   const where: string[] = [`asset_group_asset.status != 'REMOVED'`];
+  // Date range is required when metric fields are selected; default to last 30 days if not provided
+  if (opts.from && opts.to) where.push(dateClause(opts.from, opts.to));
   if (opts.campaignIds?.length) where.push(`campaign.id IN ${inClause(opts.campaignIds)}`);
   if (opts.assetGroupIds?.length) where.push(`asset_group.id IN ${inClause(opts.assetGroupIds)}`);
 

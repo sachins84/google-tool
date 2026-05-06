@@ -76,9 +76,17 @@ export const api = {
     return request<{ rows: PerfRow[] }>(`/api/${level}?${qs.toString()}`);
   },
 
-  assets: (params: { brand_id: number; campaign_id?: string; asset_group_id?: string }) => {
+  assets: (params: {
+    brand_id: number;
+    from: string;
+    to: string;
+    campaign_id?: string;
+    asset_group_id?: string;
+  }) => {
     const qs = new URLSearchParams();
     qs.set('brand_id', String(params.brand_id));
+    qs.set('from', params.from);
+    qs.set('to', params.to);
     if (params.campaign_id) qs.set('campaign_id', params.campaign_id);
     if (params.asset_group_id) qs.set('asset_group_id', params.asset_group_id);
     return request<{ rows: AssetRow[] }>(`/api/assets?${qs.toString()}`);
@@ -102,6 +110,7 @@ export interface AssetRow {
   customer_id: string;
   campaign_id?: string;
   campaign_name?: string;
+  channel_type?: string;
   asset_group_id?: string;
   asset_group_name?: string;
   asset_id?: string;
@@ -112,6 +121,7 @@ export interface AssetRow {
   text?: string;
   image_url?: string;
   youtube_video_id?: string;
+  metrics?: DerivedMetrics;
 }
 
 export type AssetFieldType =

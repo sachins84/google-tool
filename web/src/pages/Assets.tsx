@@ -6,10 +6,12 @@ import {
   type AssetTextFieldType,
   type MutatePayload,
 } from '../lib/api';
-import { truncate } from '../lib/format';
+import { fmtINR, fmtMul, fmtNum, truncate } from '../lib/format';
 
 interface Props {
   brandId: number;
+  from: string;
+  to: string;
   campaignId?: string;
   assetGroupId?: string;
 }
@@ -34,7 +36,7 @@ const FIELD_TYPE_ORDER = [
   'YOUTUBE_VIDEO', 'CALL_TO_ACTION_SELECTION', 'SITELINK',
 ];
 
-export function Assets({ brandId, campaignId, assetGroupId }: Props) {
+export function Assets({ brandId, from, to, campaignId, assetGroupId }: Props) {
   const [rows, setRows] = useState<AssetRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -49,12 +51,12 @@ export function Assets({ brandId, campaignId, assetGroupId }: Props) {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    api.assets({ brand_id: brandId, campaign_id: campaignId, asset_group_id: assetGroupId })
+    api.assets({ brand_id: brandId, from, to, campaign_id: campaignId, asset_group_id: assetGroupId })
       .then((res) => { if (!cancelled) setRows(res.rows); })
       .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : String(err)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [brandId, campaignId, assetGroupId, refreshTick]);
+  }, [brandId, from, to, campaignId, assetGroupId, refreshTick]);
 
   const filtered = useMemo(() => {
     return rows.filter((r) => {
@@ -147,8 +149,14 @@ export function Assets({ brandId, campaignId, assetGroupId }: Props) {
                 <tr>
                   <th className="px-4 py-1.5 font-medium">Type</th>
                   <th className="px-4 py-1.5 font-medium">Asset</th>
-                  <th className="px-4 py-1.5 font-medium text-right">Status</th>
-                  <th className="px-4 py-1.5 font-medium text-right">Performance</th>
+                  <th className="px-4 py-1.5 font-medium text-center">Status</th>
+                  <th className="px-4 py-1.5 font-medium text-center">Performance</th>
+                  <th className="px-4 py-1.5 font-medium text-right">Spend</th>
+                  <th className="px-4 py-1.5 font-medium text-right">Impr</th>
+                  <th className="px-4 py-1.5 font-medium text-right">Clicks</th>
+                  <th className="px-4 py-1.5 font-medium text-right">Conv</th>
+                  <th className="px-4 py-1.5 font-medium text-right">Conv. value</th>
+                  <th className="px-4 py-1.5 font-medium text-right">ROAS (RTO)</th>
                   <th className="px-4 py-1.5 font-medium text-right w-12"></th>
                 </tr>
               </thead>
@@ -156,12 +164,17 @@ export function Assets({ brandId, campaignId, assetGroupId }: Props) {
                 {g.items
                   .slice()
                   .sort((a, b) => {
+                    // sort first by spend desc within group, then fall back to canonical type order
+                    const aCost = a.metrics?.cost ?? 0;
+                    const bCost = b.metrics?.cost ?? 0;
+                    if (aCost !== bCost) return bCost - aCost;
                     const ai = FIELD_TYPE_ORDER.indexOf(a.field_type ?? '');
                     const bi = FIELD_TYPE_ORDER.indexOf(b.field_type ?? '');
                     return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
                   })
                   .map((a) => {
                     const rowKey = `${g.id}|${a.asset_id}|${a.field_type}`;
+                    const m = a.metrics;
                     return (
                       <tr key={rowKey} className="border-t">
                         <td className="px-4 py-1.5 text-xs text-gray-600">{a.field_type ?? '—'}</td>
@@ -178,15 +191,21 @@ export function Assets({ brandId, campaignId, assetGroupId }: Props) {
                               ▶ youtu.be/{a.youtube_video_id}
                             </a>
                           ) : (
-                            <span className="text-sm">{truncate(a.text ?? '—', 100)}</span>
+                            <span className="text-sm">{truncate(a.text ?? '—', 80)}</span>
                           )}
                         </td>
-                        <td className="px-4 py-1.5 text-right">
+                        <td className="px-4 py-1.5 text-center">
                           <StatusPill status={a.status} />
                         </td>
-                        <td className="px-4 py-1.5 text-right">
+                        <td className="px-4 py-1.5 text-center">
                           <PerfPill label={a.performance_label} />
                         </td>
+                        <td className="px-4 py-1.5 text-right">{m ? fmtINR(m.cost) : '—'}</td>
+                        <td className="px-4 py-1.5 text-right">{m ? fmtNum(m.impressions) : '—'}</td>
+                        <td className="px-4 py-1.5 text-right">{m ? fmtNum(m.clicks) : '—'}</td>
+                        <td className="px-4 py-1.5 text-right">{m ? fmtNum(m.conversions, 0) : '—'}</td>
+                        <td className="px-4 py-1.5 text-right">{m ? fmtINR(m.conversions_value_post_rto) : '—'}</td>
+                        <td className="px-4 py-1.5 text-right font-medium">{m ? fmtMul(m.roas_post_rto) : '—'}</td>
                         <td className="px-4 py-1.5 text-right relative">
                           <button
                             onClick={() => setOpenMenuFor(openMenuFor === rowKey ? null : rowKey)}
