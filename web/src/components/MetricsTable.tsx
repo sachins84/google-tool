@@ -136,9 +136,20 @@ export function MetricsTable({ level, rows, hasCompare, showCalcMetrics = false,
               const name = nameOf(r, level);
               const rowKey = `${r.customer_id}|${r.campaign_id}|${r.ad_group_id ?? ''}|${r.ad_id ?? r.criterion_id ?? r.search_term ?? ''}`;
               return (
-                <tr key={rowKey} className="border-t hover:bg-gray-50">
+                <tr key={rowKey} className={`border-t hover:bg-gray-50 ${r.synthetic ? 'bg-amber-50/50 italic' : ''}`}>
                   <td className="px-3 py-2">
-                    {onDrillIn ? (
+                    {r.synthetic ? (
+                      <span
+                        className="text-amber-800"
+                        title={
+                          r.synthetic_samples && r.synthetic_samples.length
+                            ? `Residual NCs from utm_campaigns that don't map to any Google Ads campaign. Examples: ${r.synthetic_samples.join(', ')}`
+                            : 'Residual NCs not attributable to any Google Ads campaign'
+                        }
+                      >
+                        {truncate(name, 60)}
+                      </span>
+                    ) : onDrillIn ? (
                       <button onClick={() => onDrillIn(r)} className="text-left hover:underline text-blue-700">
                         {truncate(name, 60)}
                       </button>

@@ -157,7 +157,9 @@ export function applyFilters(
     if (f.channelTypes.size > 0 && r.channel_type && !f.channelTypes.has(r.channel_type)) {
       return false;
     }
-    if (f.hideZeroSpend && (r.metrics?.cost ?? 0) <= 0) {
+    // synthetic rows ("Other PMax" residual buckets) have cost=0 by design but real
+    // NCs/revenue — keep them visible regardless of the zero-spend filter.
+    if (f.hideZeroSpend && (r.metrics?.cost ?? 0) <= 0 && !r.synthetic) {
       return false;
     }
     return true;

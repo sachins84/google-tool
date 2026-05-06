@@ -276,6 +276,9 @@ export interface PerfRow {
   quality_score?: number;
   // search term
   search_term?: string;
+  // synthetic "Other PMax"/"Other Search" rows for residual unattributed NCs
+  synthetic?: boolean;
+  synthetic_samples?: string[];
   metrics: DerivedMetrics;
   comparison?: DerivedMetrics;
 }

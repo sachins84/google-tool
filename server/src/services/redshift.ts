@@ -37,6 +37,7 @@ export async function testConnection(): Promise<boolean> {
 }
 
 export interface FunnelMetricsByCampaign {
+  utm_source: string;
   utm_campaign: string;
   ncs: number;            // converted (post-RTO new customers)
   amount: number;         // converted_amount (post-RTO revenue)
@@ -61,13 +62,14 @@ export interface FetchOptions {
   dateTo: string;                  // 'YYYY-MM-DD'
 }
 
-/** Fetch per-utm_campaign metrics aggregated over the date range. */
+/** Fetch per-(utm_source, utm_campaign) metrics aggregated over the date range. */
 export async function fetchByCampaign(opts: FetchOptions): Promise<FunnelMetricsByCampaign[]> {
   const client = await getPool().connect();
   try {
     const placeholders = opts.utmSourceList.map((_, i) => `$${i + 3}`).join(', ');
     const sql = `
       SELECT
+        utm_source,
         utm_campaign,
         SUM(converted)::BIGINT                                                   AS ncs,
         SUM(COALESCE(converted_amount, 0))::FLOAT                                AS amount,
@@ -80,10 +82,11 @@ export async function fetchByCampaign(opts: FetchOptions): Promise<FunnelMetrics
       WHERE dt BETWEEN $1 AND $2
         AND utm_source IN (${placeholders})
         AND utm_campaign IS NOT NULL AND utm_campaign <> ''
-      GROUP BY utm_campaign
+      GROUP BY utm_source, utm_campaign
     `;
     const result = await client.query(sql, [opts.dateFrom, opts.dateTo, ...opts.utmSourceList]);
     return result.rows.map((r) => ({
+      utm_source: String(r.utm_source),
       utm_campaign: String(r.utm_campaign),
       ncs: Number(r.ncs ?? 0),
       amount: Number(r.amount ?? 0),

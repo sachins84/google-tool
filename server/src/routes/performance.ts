@@ -64,6 +64,10 @@ interface Row {
   match_type?: string;
   quality_score?: number;
   search_term?: string;
+  // synthetic flag for "Other PMax" / "Other Search" rows holding residual NCs
+  // not attributable to any specific Google Ads campaign
+  synthetic?: boolean;
+  synthetic_samples?: string[]; // sample utm_campaigns rolled up here, for transparency
   metrics: DerivedMetrics;
   comparison?: DerivedMetrics;
 }
@@ -322,7 +326,47 @@ async function mergeRedshiftMetrics(rows: Row[], brandId: number, from: string, 
   // In redshift mode, every row gets calc fields. Unmatched rows default to 0 NCs
   // (i.e. the campaign exists in Google Ads but generated no NCs in this window
   // — explicitly zero rather than ambiguous "—").
-  return rows.map((row) => {
+  // Track which Redshift rows we successfully attached so we can bucket the rest
+  // into "Other [Channel]" synthetic rows below.
+  const consumed = new Set<string>();
+  function rsKey(source: string, campaign: string): string { return `${source}|${campaign}`; }
+
+  // Re-walk rsRows so we know which are consumed by direct-row attachment.
+  // (The byId/byName maps lost source/campaign granularity when aggregating.)
+  // For accuracy, we iterate rsRows and check if each row would land on an attached campaign.
+  const matchedCampaignIds = new Set<string>();
+  const matchedNames = new Set<string>();
+  const matchedNormNames = new Set<string>();
+  for (const row of rows) {
+    if (row.campaign_id && byId.has(row.campaign_id)) matchedCampaignIds.add(row.campaign_id);
+    if (row.campaign_name) {
+      const lc = row.campaign_name.toLowerCase();
+      const nm = normalize(row.campaign_name);
+      if (byName.has(lc)) matchedNames.add(lc);
+      if (byNormName.has(nm)) matchedNormNames.add(nm);
+    }
+  }
+  for (const r of rsRows) {
+    let attributed = false;
+    if (/^\d+$/.test(r.utm_campaign)) {
+      const cid = adIdToCampaignId.get(r.utm_campaign) ?? r.utm_campaign;
+      if (matchedCampaignIds.has(cid)) attributed = true;
+    } else {
+      const lcKey = r.utm_campaign.toLowerCase();
+      const normKey = normalize(r.utm_campaign);
+      const skuTarget = skuToCampaignId.get(lcKey);
+      const agTarget = agNameToCampaignId.get(lcKey) ?? agNameToCampaignId.get(normKey);
+      if ((skuTarget && matchedCampaignIds.has(skuTarget))
+          || (agTarget && matchedCampaignIds.has(agTarget))
+          || matchedNames.has(lcKey)
+          || matchedNormNames.has(normKey)) {
+        attributed = true;
+      }
+    }
+    if (attributed) consumed.add(rsKey(r.utm_source, r.utm_campaign));
+  }
+
+  const attachedRows = rows.map((row) => {
     let rs = row.campaign_id ? byId.get(row.campaign_id) : undefined;
     if (!rs && row.campaign_name) {
       rs = byName.get(row.campaign_name.toLowerCase())
@@ -330,6 +374,62 @@ async function mergeRedshiftMetrics(rows: Row[], brandId: number, from: string, 
     }
     return { ...row, metrics: attachRedshiftMetrics(row.metrics, rs ?? { ncs: 0, amount: 0 }) };
   });
+
+  // Synthesize "Other [Channel]" rows for residual Redshift rows that didn't
+  // attach to any Google Ads campaign. These have cost=0 (no spend attribution)
+  // but real NCs/amount, so brand-level NC totals reconcile with the per-campaign
+  // table once the user adds them up.
+  const residualBySource = new Map<string, { ncs: number; amount: number; samples: string[] }>();
+  for (const r of rsRows) {
+    if (consumed.has(rsKey(r.utm_source, r.utm_campaign))) continue;
+    const prev = residualBySource.get(r.utm_source) ?? { ncs: 0, amount: 0, samples: [] };
+    prev.ncs += r.ncs;
+    prev.amount += r.amount;
+    if (prev.samples.length < 5) prev.samples.push(r.utm_campaign);
+    residualBySource.set(r.utm_source, prev);
+  }
+
+  for (const [source, residual] of residualBySource) {
+    if (residual.ncs <= 0 && residual.amount <= 0) continue;
+    attachedRows.push(buildOtherRow(source, residual.ncs, residual.amount, residual.samples));
+  }
+
+  return attachedRows;
+}
+
+function buildOtherRow(utmSource: string, ncs: number, amount: number, samples: string[]): Row {
+  // Map utm_source → channel_type + display label so the synthetic row mirrors a
+  // real campaign row's shape (filterable, sortable, etc.).
+  const channel =
+    utmSource.toLowerCase().includes('pmax') ? { type: 'PERFORMANCE_MAX', label: 'Other PMax' }
+    : utmSource.toLowerCase().includes('search') ? { type: 'SEARCH', label: 'Other Search' }
+    : utmSource.toLowerCase().includes('pla') ? { type: 'SHOPPING', label: 'Other Shopping' }
+    : utmSource.toLowerCase().includes('dg') || utmSource.toLowerCase().includes('demand') ? { type: 'DEMAND_GEN', label: 'Other Demand Gen' }
+    : { type: 'OTHER', label: `Other (${utmSource})` };
+
+  // calc_roas is undefined for synthetic rows because we have no cost
+  // (we know NCs came in from this source but not which campaign drove them).
+  const baseMetrics = {
+    cost_micros: 0, impressions: 0, clicks: 0, conversions: 0, conversions_value: 0,
+    view_through_conversions: 0,
+    cost: 0, ctr: 0, cpc: 0, cpm: 0, cpa: 0,
+    roas_pre_rto: 0, conversions_value_post_rto: amount, roas_post_rto: 0,
+    ncs, ncs_amount: amount,
+    aov: ncs > 0 ? amount / ncs : 0,
+    calc_cpa: null,    // no cost → CPA is undefined
+    calc_roas: null,   // no cost → ROAS is undefined
+  };
+
+  return {
+    customer_id: '',
+    campaign_id: `__synthetic_${utmSource}`,
+    campaign_name: channel.label,
+    channel_type: channel.type,
+    status: 'ENABLED',
+    synthetic: true,
+    synthetic_samples: samples,
+    metrics: baseMetrics,
+  } as Row;
 }
 
 /**
