@@ -258,12 +258,15 @@ async function mergeRedshiftMetrics(rows: Row[], brandId: number, from: string, 
   try { utmSourceList = JSON.parse(cfg.utm_source_list ?? '[]'); } catch { /* ignore */ }
   if (utmSourceList.length === 0) return rows;
 
-  const rsRows = await fetchByCampaign({
-    funnelTable: cfg.funnel_table,
-    utmSourceList,
-    dateFrom: from,
-    dateTo: to,
-  });
+  // Fetch Redshift NCs by utm_campaign + Google ad_id→campaign_id map in parallel.
+  // The map is needed because Search campaigns use {creative} macro in their tracking
+  // template, so utm_campaign holds the AD ID, not the campaign ID.
+  const brand = getBrand(brandId);
+  const accountIds = brand?.accounts.map((a) => a.customer_id) ?? [];
+  const [rsRows, adIdToCampaignId] = await Promise.all([
+    fetchByCampaign({ funnelTable: cfg.funnel_table, utmSourceList, dateFrom: from, dateTo: to }),
+    buildAdIdToCampaignIdMap(accountIds),
+  ]);
 
   // utm_campaign is sometimes the Google Ads campaign ID (e.g. "23223219977"),
   // sometimes a custom name (e.g. "LJ_shopping_Manual_Generic_MVChocolate"),
@@ -289,7 +292,11 @@ async function mergeRedshiftMetrics(rows: Row[], brandId: number, from: string, 
   for (const r of rsRows) {
     const entry = { ncs: r.ncs, amount: r.amount };
     if (/^\d+$/.test(r.utm_campaign)) {
-      add(byId, r.utm_campaign, entry);
+      // numeric utm_campaign — could be either the campaign_id (PMax/DG)
+      // or an ad_id (Search uses {creative}). Resolve via ad-map to the parent campaign.
+      const resolvedCampaign = adIdToCampaignId.get(r.utm_campaign);
+      const target = resolvedCampaign ?? r.utm_campaign;
+      add(byId, target, entry);
     } else {
       add(byName, r.utm_campaign.toLowerCase(), entry);
       add(byNormName, normalize(r.utm_campaign), entry);
@@ -305,6 +312,37 @@ async function mergeRedshiftMetrics(rows: Row[], brandId: number, from: string, 
     if (!rs) return row;
     return { ...row, metrics: attachRedshiftMetrics(row.metrics, rs) };
   });
+}
+
+/**
+ * Build a {ad_id → campaign_id} index for all active ads across the given customer accounts.
+ * Used to resolve utm_campaign values that are actually ad IDs (Search campaigns using
+ * the {creative} macro in their tracking template).
+ */
+async function buildAdIdToCampaignIdMap(customerIds: string[]): Promise<Map<string, string>> {
+  if (!customerIds.length) return new Map();
+  const query = `SELECT campaign.id, ad_group_ad.ad.id FROM ad_group_ad WHERE ad_group_ad.status != 'REMOVED'`;
+  const perAccount = await Promise.all(
+    customerIds.map(async (cid) => {
+      try {
+        return await search<{ campaign?: { id?: string }; adGroupAd?: { ad?: { id?: string } } }>({
+          customerId: cid,
+          query,
+        });
+      } catch {
+        return [];
+      }
+    })
+  );
+  const map = new Map<string, string>();
+  for (const rows of perAccount) {
+    for (const r of rows) {
+      const adId = r.adGroupAd?.ad?.id;
+      const campaignId = r.campaign?.id;
+      if (adId && campaignId) map.set(adId, campaignId);
+    }
+  }
+  return map;
 }
 
 function shapeRow(level: Level, customerId: string, r: GoogleAdsRow): Row {
