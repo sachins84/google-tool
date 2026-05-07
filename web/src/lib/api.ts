@@ -122,6 +122,18 @@ export const api = {
     });
   },
 
+  campaignBreakdown: (params: {
+    brand_id: number; campaign_id: string; customer_id?: string; from: string; to: string;
+  }) => {
+    const qs = new URLSearchParams();
+    qs.set('brand_id', String(params.brand_id));
+    qs.set('campaign_id', params.campaign_id);
+    if (params.customer_id) qs.set('customer_id', params.customer_id);
+    qs.set('from', params.from);
+    qs.set('to', params.to);
+    return request<CampaignBreakdown>(`/api/campaign-breakdown?${qs.toString()}`);
+  },
+
   assets: (params: {
     brand_id: number;
     from: string;
@@ -272,6 +284,23 @@ export interface DailyInsight {
   message: string;
   campaign_name?: string;
   detail: Record<string, unknown>;
+}
+
+export interface CampaignBreakdown {
+  channel_type: string;
+  by_device: Array<{ device: string; cost: number; impressions: number; clicks: number }>;
+  by_network: Array<{ network: string; cost: number; impressions: number; clicks: number }>;
+  placements: Array<{
+    placement_type: string;
+    target_url?: string;
+    display_name?: string;
+    cost: number;
+    impressions: number;
+    clicks: number;
+  }>;
+  network_breakdown_available: boolean;
+  placement_breakdown_available: boolean;
+  notes: string[];
 }
 
 export interface BrandPayload {

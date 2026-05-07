@@ -6,6 +6,7 @@ import { MutationModal } from '../components/MutationModal';
 import { Assets } from './Assets';
 import { Filters, applyFilters, defaultFilterState, type FilterState } from '../components/Filters';
 import { NetworkSplit } from '../components/NetworkSplit';
+import { CampaignBreakdownPanel } from '../components/CampaignBreakdown';
 import type { NetworkSplitEntry } from '../lib/api';
 
 interface Props {
@@ -22,6 +23,7 @@ interface Drill {
   campaignId?: string;
   campaignName?: string;
   campaignChannelType?: string;
+  campaignCustomerId?: string;
   adGroupId?: string;
   adGroupName?: string;
   assetGroupId?: string;
@@ -125,6 +127,7 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
       campaignId: row.campaign_id,
       campaignName: row.campaign_name,
       campaignChannelType: row.channel_type,
+      campaignCustomerId: row.customer_id,
     });
     // PMax → Asset Groups (intermediate level), other types → Ad Groups
     setTab(isPmax ? 'asset_groups' : 'ad_groups');
@@ -135,6 +138,7 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
       campaignId: row.campaign_id ?? drill.campaignId,
       campaignName: row.campaign_name ?? drill.campaignName,
       campaignChannelType: drill.campaignChannelType,
+      campaignCustomerId: drill.campaignCustomerId ?? row.customer_id,
       adGroupId: row.ad_group_id,
       adGroupName: row.ad_group_name,
     });
@@ -209,8 +213,17 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
             hasCompare={hasCompare}
             brandTotals={tab === 'campaigns' ? brandTotals : undefined}
           />
-          {tab === 'campaigns' && networkSplit.length > 0 && (
+          {tab === 'campaigns' && !drill.campaignId && networkSplit.length > 0 && (
             <NetworkSplit entries={networkSplit} />
+          )}
+          {drill.campaignId && (
+            <CampaignBreakdownPanel
+              brandId={brandId}
+              campaignId={drill.campaignId}
+              customerId={drill.campaignCustomerId}
+              from={from}
+              to={to}
+            />
           )}
         </>
       )}
@@ -328,6 +341,12 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
       )}
 
       {error && <div className="bg-red-50 border border-red-200 text-red-800 rounded p-3 text-sm">{error}</div>}
+
+      {isPmaxSearchInsights && (
+        <div className="bg-amber-50 border border-amber-200 rounded p-3 text-xs text-amber-900">
+          <strong>Note:</strong> Google's API doesn't expose per-category cost on PMax search insights, so the Spend / CPC / CPM / ROAS columns will all be ₹0 here. Use Impressions, Clicks, Conv and Conv. value as the activity signals — same data the Google Ads UI shows under PMax → Insights.
+        </div>
+      )}
 
       {isAssetTab ? (
         <Assets
