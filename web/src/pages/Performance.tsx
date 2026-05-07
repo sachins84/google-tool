@@ -72,6 +72,9 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
     compare?: { ncs: number; amount: number };
   } | undefined>(undefined);
   const [networkSplit, setNetworkSplit] = useState<NetworkSplitEntry[]>([]);
+  const [pmaxBrandSplit, setPmaxBrandSplit] = useState<Array<{
+    channel: string; cost: number; impressions: number; clicks: number; conversions: number;
+  }>>([]);
 
   const hasCompare = !!(compareFrom && compareTo);
   const isAssetTab = tab === 'assets';
@@ -98,9 +101,14 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
       .then((res) => {
         if (cancelled) return;
         setRows(res.rows);
-        const r = res as { brand_redshift_totals?: typeof brandTotals; network_split?: NetworkSplitEntry[] };
+        const r = res as {
+          brand_redshift_totals?: typeof brandTotals;
+          network_split?: NetworkSplitEntry[];
+          pmax_channel_split?: typeof pmaxBrandSplit;
+        };
         setBrandTotals(r.brand_redshift_totals);
         setNetworkSplit(r.network_split ?? []);
+        setPmaxBrandSplit(r.pmax_channel_split ?? []);
       })
       .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : String(err)); })
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -213,8 +221,8 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
             hasCompare={hasCompare}
             brandTotals={tab === 'campaigns' ? brandTotals : undefined}
           />
-          {tab === 'campaigns' && !drill.campaignId && networkSplit.length > 0 && (
-            <NetworkSplit entries={networkSplit} />
+          {tab === 'campaigns' && !drill.campaignId && (networkSplit.length > 0 || pmaxBrandSplit.length > 0) && (
+            <NetworkSplit entries={networkSplit} pmaxBrandSplit={pmaxBrandSplit} />
           )}
           {drill.campaignId && (
             <CampaignBreakdownPanel

@@ -80,6 +80,13 @@ export const api = {
         compare?: { ncs: number; amount: number };
       };
       network_split?: NetworkSplitEntry[];
+      pmax_channel_split?: Array<{
+        channel: string;
+        cost: number;
+        impressions: number;
+        clicks: number;
+        conversions: number;
+      }>;
     }>(`/api/${level}?${qs.toString()}`);
   },
 

@@ -239,6 +239,79 @@ interface NetworkSplitEntry {
   conversions: number;
 }
 
+interface PmaxChannelEntry {
+  channel: string;
+  cost: number;
+  impressions: number;
+  clicks: number;
+  conversions: number;
+}
+
+function fieldTypeToChannel(fieldType: string): string {
+  switch (fieldType) {
+    case 'HEADLINE': case 'LONG_HEADLINE': case 'DESCRIPTION':
+    case 'SITELINK': case 'CALLOUT': case 'STRUCTURED_SNIPPET':
+    case 'CALL': case 'PRICE': case 'PROMOTION': case 'LEAD_FORM':
+      return 'Search';
+    case 'MARKETING_IMAGE': case 'SQUARE_MARKETING_IMAGE':
+    case 'PORTRAIT_MARKETING_IMAGE': case 'LOGO': case 'LANDSCAPE_LOGO':
+      return 'Display';
+    case 'YOUTUBE_VIDEO': return 'YouTube';
+    case 'BUSINESS_NAME': case 'CALL_TO_ACTION_SELECTION': return 'Shared';
+    default: return 'Other';
+  }
+}
+
+/**
+ * Brand-wide PMax channel breakdown via channel_aggregate_asset_view.
+ * Sums asset-level cost across ALL PMax campaigns in the brand. Numbers are
+ * accurate at brand level (no per-campaign cross-attribution issue).
+ */
+export async function fetchBrandPmaxChannelSplit(
+  brandId: number, from: string, to: string
+): Promise<PmaxChannelEntry[]> {
+  const brand = getBrand(brandId);
+  if (!brand?.accounts.length) return [];
+
+  const query = `
+    SELECT channel_aggregate_asset_view.field_type,
+           metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions
+    FROM channel_aggregate_asset_view
+    WHERE segments.date BETWEEN '${from}' AND '${to}'
+      AND channel_aggregate_asset_view.advertising_channel_type = 'PERFORMANCE_MAX'
+  `.trim();
+
+  const perAccount = await Promise.all(
+    brand.accounts.map(async (acc) => {
+      try {
+        const loginCustomerId = (await getLoginCustomerId(acc.customer_id)) ?? undefined;
+        return await search<{
+          channelAggregateAssetView?: { fieldType?: string };
+          metrics?: Record<string, unknown>;
+        }>({ customerId: acc.customer_id, loginCustomerId, query });
+      } catch {
+        return [];
+      }
+    })
+  );
+
+  const buckets = new Map<string, PmaxChannelEntry>();
+  for (const rows of perAccount) {
+    for (const r of rows) {
+      const ft = r.channelAggregateAssetView?.fieldType ?? 'UNKNOWN';
+      const channel = fieldTypeToChannel(ft);
+      const b = buckets.get(channel) ?? { channel, cost: 0, impressions: 0, clicks: 0, conversions: 0 };
+      const m = r.metrics ?? {};
+      b.cost += Number(m.costMicros ?? 0) / 1_000_000;
+      b.impressions += Number(m.impressions ?? 0);
+      b.clicks += Number(m.clicks ?? 0);
+      b.conversions += Number(m.conversions ?? 0);
+      buckets.set(channel, b);
+    }
+  }
+  return Array.from(buckets.values()).sort((a, b) => b.cost - a.cost);
+}
+
 /** Brand-level spend split by ad network (Search vs Display vs YouTube vs PMax-mixed). */
 export async function fetchNetworkSplit(brandId: number, from: string, to: string): Promise<NetworkSplitEntry[]> {
   const brand = getBrand(brandId);
@@ -822,14 +895,16 @@ export async function performanceRoutes(app: FastifyInstance): Promise<void> {
         // some campaigns can't be linked via utm_campaign.
         let brand_redshift_totals: { primary?: BrandRsTotal; compare?: BrandRsTotal } | undefined;
         let network_split: NetworkSplitEntry[] | undefined;
+        let pmax_channel_split: PmaxChannelEntry[] | undefined;
         if (level === 'campaign') {
-          [brand_redshift_totals, network_split] = await Promise.all([
+          [brand_redshift_totals, network_split, pmax_channel_split] = await Promise.all([
             tryFetchBrandTotals(q.brand_id, q.from, q.to, q.compare_from, q.compare_to),
             fetchNetworkSplit(q.brand_id, q.from, q.to),
+            fetchBrandPmaxChannelSplit(q.brand_id, q.from, q.to),
           ]);
         }
 
-        return { rows: primary, brand_redshift_totals, network_split };
+        return { rows: primary, brand_redshift_totals, network_split, pmax_channel_split };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         app.log.error({ err: message }, `${level} fetch failed`);
