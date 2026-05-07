@@ -308,6 +308,15 @@ export interface CampaignBreakdown {
     impressions: number;
   }>;
   pmax_total_impr?: number;
+  // PMax channel split (Search/Display/YouTube/Shared/Other) derived from
+  // asset-level cost attribution via channel_aggregate_asset_view
+  pmax_channel_split?: Array<{
+    channel: string;
+    cost: number;
+    impressions: number;
+    clicks: number;
+    conversions: number;
+  }>;
   network_breakdown_available: boolean;
   placement_breakdown_available: boolean;
   notes: string[];

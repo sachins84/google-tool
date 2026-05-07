@@ -53,12 +53,23 @@ export function CampaignBreakdownPanel({ brandId, campaignId, customerId, from, 
           <SplitList entries={data.by_device.map((e) => ({ label: e.device, cost: e.cost, sub: `${fmtNum(e.clicks)} clicks` }))} total={totalSpend} />
         </div>
         <div className="space-y-2">
-          <div className="text-xs font-medium text-gray-700 uppercase tracking-wide">By network</div>
-          {data.network_breakdown_available ? (
+          <div className="text-xs font-medium text-gray-700 uppercase tracking-wide">
+            {data.pmax_channel_split && data.pmax_channel_split.length > 0 ? 'By channel (PMax)' : 'By network'}
+          </div>
+          {data.pmax_channel_split && data.pmax_channel_split.length > 0 ? (
+            <SplitList
+              entries={data.pmax_channel_split.map((e) => ({
+                label: e.channel,
+                cost: e.cost,
+                sub: `${fmtNum(e.clicks)} clicks · ${fmtNum(e.conversions, 0)} conv`,
+              }))}
+              total={data.pmax_channel_split.reduce((a, e) => a + e.cost, 0)}
+            />
+          ) : data.network_breakdown_available ? (
             <SplitList entries={data.by_network.map((e) => ({ label: e.network, cost: e.cost, sub: `${fmtNum(e.clicks)} clicks` }))} total={totalSpend} />
           ) : (
             <div className="text-xs text-gray-500 italic">
-              Not available for Performance Max — Google's API doesn't expose Search/Display/YouTube split for PMax campaigns.
+              No channel attribution data for this PMax campaign in this window.
             </div>
           )}
         </div>

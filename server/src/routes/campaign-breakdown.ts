@@ -41,6 +41,44 @@ interface PmaxPlacementRow {
   metrics?: { impressions?: string };
 }
 
+interface ChannelAssetRow {
+  channelAggregateAssetView?: { fieldType?: string; asset?: string; advertisingChannelType?: string };
+  metrics?: { costMicros?: string; impressions?: string; clicks?: string; conversions?: number };
+}
+
+/**
+ * Map asset field_type → Google's nominal serving channel.
+ * Mirrors how Google's UI groups PMax channel performance.
+ */
+function fieldTypeToChannel(fieldType: string): 'Search' | 'Display' | 'YouTube' | 'Shared' | 'Other' {
+  switch (fieldType) {
+    case 'HEADLINE':
+    case 'LONG_HEADLINE':
+    case 'DESCRIPTION':
+    case 'SITELINK':
+    case 'CALLOUT':
+    case 'STRUCTURED_SNIPPET':
+    case 'CALL':
+    case 'PRICE':
+    case 'PROMOTION':
+    case 'LEAD_FORM':
+      return 'Search';
+    case 'MARKETING_IMAGE':
+    case 'SQUARE_MARKETING_IMAGE':
+    case 'PORTRAIT_MARKETING_IMAGE':
+    case 'LOGO':
+    case 'LANDSCAPE_LOGO':
+      return 'Display';
+    case 'YOUTUBE_VIDEO':
+      return 'YouTube';
+    case 'BUSINESS_NAME':
+    case 'CALL_TO_ACTION_SELECTION':
+      return 'Shared'; // used across networks
+    default:
+      return 'Other';
+  }
+}
+
 const MICROS = 1_000_000;
 
 export async function campaignBreakdownRoutes(app: FastifyInstance): Promise<void> {
@@ -102,6 +140,61 @@ export async function campaignBreakdownRoutes(app: FastifyInstance): Promise<voi
       ]);
 
       const channelType = channelRow[0]?.campaign?.advertisingChannelType ?? 'UNKNOWN';
+
+      // PMax-only: derive Search/Display/YouTube cost split via channel_aggregate_asset_view.
+      // segments.ad_network_type returns MIXED for PMax, but Google attributes asset-level
+      // cost in this view. Mapping field_type → channel matches how Google's UI computes it.
+      let pmax_channel_split: Array<{ channel: string; cost: number; impressions: number; clicks: number; conversions: number }> | undefined;
+      if (channelType === 'PERFORMANCE_MAX') {
+        try {
+          // Step 1: collect asset IDs used in this campaign's asset groups
+          const assetRows = await search<{ asset?: { id?: string } }>({
+            customerId: customer_id, loginCustomerId,
+            query: `SELECT asset.id FROM asset_group_asset
+                    WHERE campaign.id = ${q.campaign_id}
+                      AND asset_group_asset.status != 'REMOVED'`,
+          });
+          const assetIds = Array.from(new Set(assetRows.map((r) => r.asset?.id).filter((x): x is string => !!x)));
+          if (assetIds.length > 0) {
+            // Step 2: query channel_aggregate_asset_view for those assets — chunk in batches of 200
+            // to keep IN clauses sane
+            const chunks: string[][] = [];
+            for (let i = 0; i < assetIds.length; i += 200) chunks.push(assetIds.slice(i, i + 200));
+            const allRows: ChannelAssetRow[] = [];
+            for (const chunk of chunks) {
+              const inList = chunk.map((id) => `'customers/${customer_id}/assets/${id}'`).join(',');
+              const rows = await search<ChannelAssetRow>({
+                customerId: customer_id, loginCustomerId,
+                query: `SELECT channel_aggregate_asset_view.field_type,
+                               channel_aggregate_asset_view.asset,
+                               metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions
+                        FROM channel_aggregate_asset_view
+                        WHERE segments.date BETWEEN '${q.from}' AND '${q.to}'
+                          AND channel_aggregate_asset_view.advertising_channel_type = 'PERFORMANCE_MAX'
+                          AND channel_aggregate_asset_view.asset IN (${inList})`,
+              });
+              allRows.push(...rows);
+            }
+
+            const buckets = new Map<string, { cost: number; impressions: number; clicks: number; conversions: number }>();
+            for (const r of allRows) {
+              const ft = r.channelAggregateAssetView?.fieldType ?? 'UNKNOWN';
+              const channel = fieldTypeToChannel(ft);
+              const b = buckets.get(channel) ?? { cost: 0, impressions: 0, clicks: 0, conversions: 0 };
+              b.cost += Number(r.metrics?.costMicros ?? 0) / MICROS;
+              b.impressions += Number(r.metrics?.impressions ?? 0);
+              b.clicks += Number(r.metrics?.clicks ?? 0);
+              b.conversions += Number(r.metrics?.conversions ?? 0);
+              buckets.set(channel, b);
+            }
+            pmax_channel_split = Array.from(buckets.entries())
+              .map(([channel, v]) => ({ channel, ...v }))
+              .sort((a, b) => b.cost - a.cost);
+          }
+        } catch (err) {
+          app.log.warn({ err: err instanceof Error ? err.message : String(err) }, 'pmax channel breakdown failed');
+        }
+      }
 
       const by_device = byDeviceRows.map((r) => ({
         device: r.segments?.device ?? 'UNKNOWN',
@@ -169,14 +262,19 @@ export async function campaignBreakdownRoutes(app: FastifyInstance): Promise<voi
         pmax_placements_by_type,
         pmax_top_placements,
         pmax_total_impr,
+        pmax_channel_split,
         network_breakdown_available,
         placement_breakdown_available,
         notes: channelType === 'PERFORMANCE_MAX'
-          ? [
-              'Cost split by network (YouTube/Search/Display) is NOT exposed via Google Ads API for PMax — Google withholds this in the public API.',
-              'YouTube placements are exposed (impressions only) via performance_max_placement_view — see below.',
-              'Search query categories are available on the Search Insights tab (also impressions/conversions only, no cost).',
-            ]
+          ? pmax_channel_split && pmax_channel_split.length > 0
+            ? [
+                'PMax channel split is derived from asset-level cost attribution (channel_aggregate_asset_view → field_type → channel) — same data Google\'s UI uses.',
+                'IMPORTANT: trust the percentages, not the absolute numbers. Asset costs sum across all PMax campaigns those assets serve in (Google\'s API doesn\'t scope asset cost by campaign), so totals here can exceed this campaign\'s actual spend. Proportions remain accurate.',
+                '"Shared" = assets used across networks (business name, CTA). "Other" = uncategorised field types.',
+              ]
+            : [
+                'No asset-level cost data found for this PMax campaign in this window — possibly just launched, low spend, or asset-group changes mid-window.',
+              ]
           : [],
       };
     } catch (err) {
