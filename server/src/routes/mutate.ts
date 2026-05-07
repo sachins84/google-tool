@@ -172,7 +172,7 @@ export async function mutateRoutes(app: FastifyInstance): Promise<void> {
     }
 
     let operations: Array<Record<string, unknown>> = [];
-    let actionLabel = body.action;
+    let actionLabel: string = body.action;
     let before: unknown = undefined;
     let after: unknown = undefined;
     let target: string;

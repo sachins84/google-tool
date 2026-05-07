@@ -1,7 +1,9 @@
+import path from 'node:path';
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
-import { config } from './config.js';
+import fastifyStatic from '@fastify/static';
+import { config, projectRoot } from './config.js';
 import { initDatabase } from './db/init.js';
 import { authRoutes } from './routes/auth.js';
 import { accountRoutes } from './routes/accounts.js';
@@ -42,6 +44,17 @@ async function main(): Promise<void> {
   // MCP server — public (or token-gated via MCP_SECRET). Mounted outside /api/* so
   // it bypasses the session-cookie auth middleware.
   await app.register(mcpRoutes, { prefix: '/mcp' });
+
+  if (config.NODE_ENV === 'production') {
+    const webDist = path.join(projectRoot, 'web', 'dist');
+    await app.register(fastifyStatic, { root: webDist });
+    app.setNotFoundHandler((req, reply) => {
+      if (req.url.startsWith('/api') || req.url.startsWith('/mcp')) {
+        return reply.code(404).send({ error: 'Not Found' });
+      }
+      return reply.sendFile('index.html');
+    });
+  }
 
   await app.listen({ port: config.PORT, host: '0.0.0.0' });
   console.log(`[server] listening on http://localhost:${config.PORT}`);
