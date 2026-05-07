@@ -35,6 +35,12 @@ interface PlacementRow {
   metrics?: { costMicros?: string; impressions?: string; clicks?: string };
 }
 
+interface PmaxPlacementRow {
+  campaign?: { id?: string };
+  performanceMaxPlacementView?: { placementType?: string; placement?: string; displayName?: string; targetUrl?: string };
+  metrics?: { impressions?: string };
+}
+
 const MICROS = 1_000_000;
 
 export async function campaignBreakdownRoutes(app: FastifyInstance): Promise<void> {
@@ -54,7 +60,7 @@ export async function campaignBreakdownRoutes(app: FastifyInstance): Promise<voi
     try {
       const loginCustomerId = (await getLoginCustomerId(customer_id)) ?? undefined;
 
-      const [byDeviceRows, byNetworkRows, placementRows, channelRow] = await Promise.all([
+      const [byDeviceRows, byNetworkRows, placementRows, channelRow, pmaxPlacements] = await Promise.all([
         search<CampaignMetricsRow>({
           customerId: customer_id, loginCustomerId,
           query: `SELECT segments.device, metrics.cost_micros, metrics.impressions, metrics.clicks
@@ -79,6 +85,20 @@ export async function campaignBreakdownRoutes(app: FastifyInstance): Promise<voi
           customerId: customer_id, loginCustomerId,
           query: `SELECT campaign.advertising_channel_type FROM campaign WHERE campaign.id = ${q.campaign_id} LIMIT 1`,
         }),
+        // PMax YouTube placements — impressions only (no cost; Google constraint).
+        // Top 50 by impressions is plenty for the UI; the long tail isn't actionable.
+        search<PmaxPlacementRow>({
+          customerId: customer_id, loginCustomerId,
+          query: `SELECT campaign.id, performance_max_placement_view.placement,
+                         performance_max_placement_view.placement_type,
+                         performance_max_placement_view.display_name,
+                         performance_max_placement_view.target_url,
+                         metrics.impressions
+                  FROM performance_max_placement_view
+                  WHERE segments.date BETWEEN '${q.from}' AND '${q.to}'
+                    AND campaign.id = ${q.campaign_id}
+                  ORDER BY metrics.impressions DESC LIMIT 50`,
+        }).catch(() => [] as PmaxPlacementRow[]),
       ]);
 
       const channelType = channelRow[0]?.campaign?.advertisingChannelType ?? 'UNKNOWN';
@@ -118,6 +138,25 @@ export async function campaignBreakdownRoutes(app: FastifyInstance): Promise<voi
         clicks: Number(r.metrics?.clicks ?? 0),
       }));
 
+      // PMax placement view exposes impressions only (no cost). Aggregate by placement_type
+      // (currently always YOUTUBE_VIDEO) + return top 25 individual placements for the table.
+      const pmax_placements_by_type = pmaxPlacements.reduce<Record<string, number>>((acc, r) => {
+        const t = r.performanceMaxPlacementView?.placementType ?? 'UNKNOWN';
+        acc[t] = (acc[t] ?? 0) + Number(r.metrics?.impressions ?? 0);
+        return acc;
+      }, {});
+      const pmax_top_placements = pmaxPlacements
+        .map((r) => ({
+          placement_type: r.performanceMaxPlacementView?.placementType ?? '?',
+          target_url: r.performanceMaxPlacementView?.targetUrl,
+          display_name: r.performanceMaxPlacementView?.displayName,
+          placement: r.performanceMaxPlacementView?.placement,
+          impressions: Number(r.metrics?.impressions ?? 0),
+        }))
+        .sort((a, b) => b.impressions - a.impressions)
+        .slice(0, 25);
+      const pmax_total_impr = Object.values(pmax_placements_by_type).reduce((a, b) => a + b, 0);
+
       // Honest meta about which sections are reliable for this channel type
       const network_breakdown_available = channelType !== 'PERFORMANCE_MAX';
       const placement_breakdown_available = channelType !== 'PERFORMANCE_MAX';
@@ -127,13 +166,16 @@ export async function campaignBreakdownRoutes(app: FastifyInstance): Promise<voi
         by_device,
         by_network,
         placements,
+        pmax_placements_by_type,
+        pmax_top_placements,
+        pmax_total_impr,
         network_breakdown_available,
         placement_breakdown_available,
         notes: channelType === 'PERFORMANCE_MAX'
           ? [
-              'Google Ads API does not expose YouTube/Search/Display split for Performance Max campaigns.',
-              'The Google Ads UI computes this breakdown from internal data not available to third-party tools.',
-              'Available alternatives: device split (below) and Asset Groups tab.',
+              'Cost split by network (YouTube/Search/Display) is NOT exposed via Google Ads API for PMax — Google withholds this in the public API.',
+              'YouTube placements are exposed (impressions only) via performance_max_placement_view — see below.',
+              'Search query categories are available on the Search Insights tab (also impressions/conversions only, no cost).',
             ]
           : [],
       };

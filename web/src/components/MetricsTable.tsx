@@ -235,6 +235,11 @@ export function MetricsTable({ level, rows, hasCompare, showCalcMetrics = false,
                               Add as negative…
                             </ActionButton>
                           )}
+                          {level === 'keyword' && (
+                            <ActionButton onClick={() => { setOpenActionsFor(null); onAction({ kind: 'add_negative', row: r }); }}>
+                              Add as negative…
+                            </ActionButton>
+                          )}
                         </div>
                       )}
                     </td>

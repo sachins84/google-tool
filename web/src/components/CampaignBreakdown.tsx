@@ -64,6 +64,46 @@ export function CampaignBreakdownPanel({ brandId, campaignId, customerId, from, 
         </div>
       </div>
 
+      {data.pmax_top_placements && data.pmax_top_placements.length > 0 && (
+        <div className="space-y-2">
+          <div className="text-xs font-medium text-gray-700 uppercase tracking-wide">
+            PMax YouTube placements (top 25 by impressions)
+          </div>
+          <div className="text-xs text-gray-500">
+            {(data.pmax_total_impr ?? 0).toLocaleString('en-IN')} total impressions on YouTube — cost not exposed by Google's API for PMax.
+            {' '}Use this list to identify low-quality channels and add them as account-level negatives.
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead className="text-left text-gray-600">
+                <tr>
+                  <th className="px-2 py-1">Type</th>
+                  <th className="px-2 py-1">Channel / Video</th>
+                  <th className="px-2 py-1 text-right">Impressions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.pmax_top_placements.map((p, i) => (
+                  <tr key={i} className="border-t">
+                    <td className="px-2 py-1 text-gray-600">{p.placement_type}</td>
+                    <td className="px-2 py-1">
+                      {p.target_url ? (
+                        <a href={p.target_url} target="_blank" rel="noopener noreferrer" className="text-blue-700 hover:underline">
+                          {truncate(p.display_name ?? p.target_url, 70)}
+                        </a>
+                      ) : (
+                        truncate(p.display_name ?? p.placement ?? '—', 70)
+                      )}
+                    </td>
+                    <td className="px-2 py-1 text-right">{fmtNum(p.impressions)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {data.placements.length > 0 && (
         <div className="space-y-2">
           <div className="text-xs font-medium text-gray-700 uppercase tracking-wide">Top 25 placements</div>

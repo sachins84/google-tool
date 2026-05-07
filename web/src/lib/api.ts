@@ -298,6 +298,16 @@ export interface CampaignBreakdown {
     impressions: number;
     clicks: number;
   }>;
+  // PMax-only: YouTube placement detail (impressions only — cost not exposed)
+  pmax_placements_by_type?: Record<string, number>;
+  pmax_top_placements?: Array<{
+    placement_type: string;
+    target_url?: string;
+    display_name?: string;
+    placement?: string;
+    impressions: number;
+  }>;
+  pmax_total_impr?: number;
   network_breakdown_available: boolean;
   placement_breakdown_available: boolean;
   notes: string[];

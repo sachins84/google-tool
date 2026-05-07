@@ -15,7 +15,11 @@ export function MutationModal({ brandId, action, onClose, onSuccess }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [dryRunPassed, setDryRunPassed] = useState(false);
   const [budgetInr, setBudgetInr] = useState<number>(action.kind === 'update_budget' ? Math.round(action.row.daily_budget_inr ?? 0) : 0);
-  const [negText, setNegText] = useState<string>(action.kind === 'add_negative' ? action.row.search_term ?? '' : '');
+  const [negText, setNegText] = useState<string>(
+    action.kind === 'add_negative'
+      ? (action.row.search_term ?? action.row.keyword_text ?? '')
+      : ''
+  );
   const [negMatch, setNegMatch] = useState<'EXACT' | 'PHRASE' | 'BROAD'>('PHRASE');
   const [kwText, setKwText] = useState('');
   const [kwMatch, setKwMatch] = useState<'EXACT' | 'PHRASE' | 'BROAD'>('BROAD');
