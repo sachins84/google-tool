@@ -2,10 +2,14 @@
   "name": "google-ads-tool",
   "version": "0.1.0",
   "private": true,
-  "workspaces": ["server", "web"],
+  "workspaces": [
+    "server",
+    "web"
+  ],
   "scripts": {
     "dev": "npm run dev --workspace=server & npm run dev --workspace=web",
     "build": "npm run build --workspace=server && npm run build --workspace=web",
     "start": "npm run start --workspace=server"
-  }
+  },
+  "packageManager": "yarn@4.13.0+sha512.5c20ba010c99815433e5c8453112165e673f1c7948d8d2b267f4b5e52097538658388ebc9f9580656d9b75c5cc996f990f611f99304a2197d4c56d21eea370e7"
 }

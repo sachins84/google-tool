@@ -80,7 +80,14 @@ export function Insights({ brandId, brandName, from, to, compareFrom, compareTo 
       <section className="bg-blue-50 border border-blue-200 rounded p-3 text-xs space-y-1">
         <div className="font-medium text-blue-900">Free-form Q&A — connect Claude.ai via MCP</div>
         <p className="text-blue-900">
-          For ad-hoc questions, point Claude.ai at <code className="font-mono">http://localhost:4000/mcp</code> (Settings → MCP servers). Uses your existing Claude.ai subscription, no extra API key.
+          For free-form Q&A, connect this tool's MCP server to Claude.ai instead of running queries here. Claude.ai can pull live data from the same source and reason across multiple tools (e.g. cross-checking with your meta-tool MCP). Uses your existing Claude.ai subscription, no extra API key.
+        </p>
+        <div className="font-mono text-xs bg-white border rounded px-3 py-2 text-gray-800">
+          MCP endpoint: <code>http://localhost:5011/mcp</code> &nbsp;·&nbsp; Available tools:
+          <code> list_brands</code>, <code>list_accessible_accounts</code>, <code>get_campaigns</code>, <code>get_network_split</code>, <code>get_daily_insights</code>, <code>get_audit_log</code>
+        </div>
+        <p className="text-xs text-blue-800">
+          To add: in Claude.ai → Settings → MCP servers → Add → paste the URL above. Optional: set <code>MCP_SECRET</code> in <code>.env</code> for token auth before exposing publicly.
         </p>
       </section>
     </div>

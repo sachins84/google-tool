@@ -8,7 +8,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 loadEnv({ path: path.resolve(__dirname, '..', '..', '.env') });
 
 const schema = z.object({
-  PORT: z.coerce.number().default(4000),
+  PORT: z.coerce.number().default(5011),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   SESSION_SECRET: z.string().min(16),
 
