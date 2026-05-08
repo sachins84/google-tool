@@ -63,21 +63,37 @@ export function deriveMetrics(raw: RawMetrics): DerivedMetrics {
   };
 }
 
-/** Attach Redshift-sourced post-RTO fields (NCs, AOV, calc CPA, calc ROAS). */
+/**
+ * Attach Redshift-sourced post-RTO fields (NCs, AOV, calc CPA, calc ROAS).
+ *
+ * Funnel data (lj_funnel_daily etc.) is GROSS — at-order-time numbers, before
+ * RTO and refunds are netted out. We apply per-brand RTO factors:
+ *   - nc_rto_factor: % of NCs that get cancelled (RTO'd before delivery)
+ *   - revenue_rto_factor: % of revenue lost to RTO + refunds (typically higher
+ *     than NC factor because high-AOV orders RTO at higher rates)
+ *
+ * If revenue_rto_factor is omitted it defaults to nc_rto_factor (proportional
+ * reduction → AOV unchanged).
+ */
 export function attachRedshiftMetrics(
   m: DerivedMetrics,
-  rs: { ncs: number; amount: number }
+  rs: { ncs: number; amount: number },
+  rtoFactors: { nc: number; revenue: number } = { nc: 0, revenue: 0 }
 ): DerivedMetrics {
+  const ncFactor = Math.max(0, Math.min(1, rtoFactors.nc));
+  const revFactor = Math.max(0, Math.min(1, rtoFactors.revenue));
+  const adjNcs = rs.ncs * (1 - ncFactor);
+  const adjAmount = rs.amount * (1 - revFactor);
   return {
     ...m,
-    ncs: rs.ncs,
-    ncs_amount: rs.amount,
-    aov: rs.ncs > 0 ? rs.amount / rs.ncs : 0,
-    calc_cpa: rs.ncs > 0 ? m.cost / rs.ncs : 0,
-    calc_roas: m.cost > 0 ? rs.amount / m.cost : 0,
+    ncs: adjNcs,
+    ncs_amount: adjAmount,
+    aov: adjNcs > 0 ? adjAmount / adjNcs : 0,
+    calc_cpa: adjNcs > 0 ? m.cost / adjNcs : 0,
+    calc_roas: m.cost > 0 ? adjAmount / m.cost : 0,
     // Also overwrite the post-RTO ROAS so KPI strip picks up Redshift truth automatically.
-    conversions_value_post_rto: rs.amount,
-    roas_post_rto: m.cost > 0 ? rs.amount / m.cost : 0,
+    conversions_value_post_rto: adjAmount,
+    roas_post_rto: m.cost > 0 ? adjAmount / m.cost : 0,
   };
 }
 

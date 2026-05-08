@@ -7,7 +7,8 @@ import { getBrandPreset } from '../config/brand-presets.js';
 
 const brandUpsertSchema = z.object({
   name: z.string().min(1),
-  rto_factor: z.number().min(0).max(1).default(0),
+  rto_factor: z.number().min(0).max(1).default(0),       // NC RTO factor
+  revenue_rto_factor: z.number().min(0).max(1).optional(), // optional; falls back to rto_factor
   rto_mode: z.enum(['flat', 'csv', 'redshift']).default('flat'),
   account_ids: z.array(z.string()).default([]),
 });
@@ -17,10 +18,11 @@ export async function brandRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/', async () => {
     const db = getDb();
-    const brands = db.prepare('SELECT id, name, rto_factor, rto_mode FROM brands ORDER BY name').all() as Array<{
+    const brands = db.prepare('SELECT id, name, rto_factor, revenue_rto_factor, rto_mode FROM brands ORDER BY name').all() as Array<{
       id: number;
       name: string;
       rto_factor: number;
+      revenue_rto_factor: number | null;
       rto_mode: string;
     }>;
     const accounts = db.prepare('SELECT brand_id, customer_id, customer_name FROM brand_accounts').all() as Array<{
@@ -49,8 +51,8 @@ export async function brandRoutes(app: FastifyInstance): Promise<void> {
       const preset = getBrandPreset(data.name);
       const effectiveMode = preset && data.rto_mode === 'flat' ? 'redshift' : data.rto_mode;
       const result = db.prepare(
-        'INSERT INTO brands (name, rto_factor, rto_mode) VALUES (?, ?, ?)'
-      ).run(data.name, data.rto_factor, effectiveMode);
+        'INSERT INTO brands (name, rto_factor, revenue_rto_factor, rto_mode) VALUES (?, ?, ?, ?)'
+      ).run(data.name, data.rto_factor, data.revenue_rto_factor ?? null, effectiveMode);
       const brandId = result.lastInsertRowid as number;
       for (const cid of data.account_ids) {
         db.prepare(
@@ -82,8 +84,8 @@ export async function brandRoutes(app: FastifyInstance): Promise<void> {
       const preset = getBrandPreset(data.name);
       const effectiveMode = preset && data.rto_mode === 'flat' ? 'redshift' : data.rto_mode;
       db.prepare(
-        'UPDATE brands SET name = ?, rto_factor = ?, rto_mode = ? WHERE id = ?'
-      ).run(data.name, data.rto_factor, effectiveMode, id);
+        'UPDATE brands SET name = ?, rto_factor = ?, revenue_rto_factor = ?, rto_mode = ? WHERE id = ?'
+      ).run(data.name, data.rto_factor, data.revenue_rto_factor ?? null, effectiveMode, id);
       db.prepare('DELETE FROM brand_accounts WHERE brand_id = ?').run(id);
       for (const cid of data.account_ids) {
         db.prepare('INSERT INTO brand_accounts (brand_id, customer_id) VALUES (?, ?)').run(id, cid);

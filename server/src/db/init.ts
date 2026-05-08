@@ -47,6 +47,7 @@ export function initDatabase(): Database.Database {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT UNIQUE NOT NULL,
       rto_factor REAL DEFAULT 0,
+      revenue_rto_factor REAL,
       rto_mode TEXT DEFAULT 'flat',
       created_at INTEGER DEFAULT (strftime('%s','now'))
     );
@@ -203,6 +204,9 @@ export function initDatabase(): Database.Database {
       expires_at INTEGER NOT NULL
     );
   `);
+
+  // Idempotent column adds — safe for already-initialised DBs
+  try { db.exec('ALTER TABLE brands ADD COLUMN revenue_rto_factor REAL'); } catch { /* already exists */ }
 
   bootstrapAdmin(db);
   bootstrapDefaultBrand(db);

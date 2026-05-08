@@ -12,6 +12,7 @@ interface Brand {
   id: number;
   name: string;
   rto_factor: number;
+  revenue_rto_factor: number | null;
   rto_mode: string;
   accounts: Array<{ customer_id: string; customer_name: string | null }>;
 }
@@ -94,7 +95,8 @@ export function Settings({ onBrandsChanged }: Props) {
               <thead className="bg-gray-50 text-left">
                 <tr>
                   <th className="px-3 py-2 font-medium">Name</th>
-                  <th className="px-3 py-2 font-medium">RTO factor</th>
+                  <th className="px-3 py-2 font-medium">NC RTO %</th>
+                  <th className="px-3 py-2 font-medium">Revenue RTO %</th>
                   <th className="px-3 py-2 font-medium">RTO mode</th>
                   <th className="px-3 py-2 font-medium">Linked accounts</th>
                   <th className="px-3 py-2 font-medium text-right">Actions</th>
@@ -105,6 +107,7 @@ export function Settings({ onBrandsChanged }: Props) {
                   <tr key={b.id} className="border-t">
                     <td className="px-3 py-2 font-medium">{b.name}</td>
                     <td className="px-3 py-2">{(b.rto_factor * 100).toFixed(0)}%</td>
+                    <td className="px-3 py-2">{(b.revenue_rto_factor != null ? b.revenue_rto_factor : b.rto_factor) * 100 |0}%</td>
                     <td className="px-3 py-2">
                       <span className="inline-block px-2 py-0.5 rounded bg-gray-100 text-xs">
                         {b.rto_mode}
@@ -166,6 +169,9 @@ interface FormProps {
 function BrandForm({ accounts, initial, onCancel, onSave }: FormProps) {
   const [name, setName] = useState(initial?.name ?? '');
   const [rtoFactor, setRtoFactor] = useState(initial ? Math.round(initial.rto_factor * 100) : 0);
+  const [revenueRtoFactor, setRevenueRtoFactor] = useState<number | ''>(
+    initial?.revenue_rto_factor != null ? Math.round(initial.revenue_rto_factor * 100) : ''
+  );
   const [rtoMode, setRtoMode] = useState<'flat' | 'csv' | 'redshift'>(
     (initial?.rto_mode as 'flat' | 'csv' | 'redshift') ?? 'flat'
   );
@@ -197,21 +203,27 @@ function BrandForm({ accounts, initial, onCancel, onSave }: FormProps) {
               autoFocus
             />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <div>
-              <label className="block text-sm font-medium mb-1">RTO factor (%)</label>
+              <label className="block text-sm font-medium mb-1">NC RTO %</label>
               <input
-                type="number"
-                min={0}
-                max={100}
-                step="0.1"
+                type="number" min={0} max={100} step="0.1"
                 value={rtoFactor}
                 onChange={(e) => setRtoFactor(Number(e.target.value))}
                 className="w-full border rounded px-3 py-2"
               />
-              <p className="text-xs text-gray-500 mt-1">
-                Subtracted from Google's reported revenue when computing post-RTO ROAS.
-              </p>
+              <p className="text-xs text-gray-500 mt-1">% of NCs cancelled (RTO).</p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Revenue RTO %</label>
+              <input
+                type="number" min={0} max={100} step="0.1"
+                value={revenueRtoFactor}
+                onChange={(e) => setRevenueRtoFactor(e.target.value === '' ? '' : Number(e.target.value))}
+                className="w-full border rounded px-3 py-2"
+                placeholder="defaults to NC RTO %"
+              />
+              <p className="text-xs text-gray-500 mt-1">% of revenue lost. Often higher than NC RTO % because high-AOV orders RTO more. Leave blank to mirror NC %.</p>
             </div>
             <div>
               <label className="block text-sm font-medium mb-1">RTO mode</label>
@@ -220,9 +232,9 @@ function BrandForm({ accounts, initial, onCancel, onSave }: FormProps) {
                 onChange={(e) => setRtoMode(e.target.value as 'flat' | 'csv' | 'redshift')}
                 className="w-full border rounded px-3 py-2"
               >
-                <option value="flat">Flat factor (v1)</option>
+                <option value="flat">Flat factor</option>
+                <option value="redshift">Redshift live</option>
                 <option value="csv" disabled>CSV upload (coming)</option>
-                <option value="redshift" disabled>Redshift live (placeholder)</option>
               </select>
             </div>
           </div>
@@ -255,6 +267,7 @@ function BrandForm({ accounts, initial, onCancel, onSave }: FormProps) {
             onClick={() => onSave({
               name: name.trim(),
               rto_factor: rtoFactor / 100,
+              revenue_rto_factor: revenueRtoFactor === '' ? undefined : revenueRtoFactor / 100,
               rto_mode: rtoMode,
               account_ids: Array.from(picked),
             })}

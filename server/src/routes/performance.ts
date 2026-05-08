@@ -387,14 +387,21 @@ export async function tryFetchBrandTotals(
   try { utmSourceList = JSON.parse(cfg.utm_source_list ?? '[]'); } catch { /* ignore */ }
   if (utmSourceList.length === 0) return undefined;
 
+  // Apply the brand's NC + revenue RTO factors on top of the gross funnel numbers,
+  // so KPI strip totals match the per-row Calc ROAS / NCs.
+  const brand = getBrand(brandId);
+  const ncFactor = brand?.rto_factor ?? 0;
+  const revFactor = brand?.revenue_rto_factor ?? brand?.rto_factor ?? 0;
+  const adj = (n: number, factor: number) => n * (1 - Math.max(0, Math.min(1, factor)));
+
   const primary = await fetchTotal({ funnelTable: cfg.funnel_table, utmSourceList, dateFrom: from, dateTo: to });
   let compare: BrandRsTotal | undefined;
   if (compareFrom && compareTo) {
     const c = await fetchTotal({ funnelTable: cfg.funnel_table, utmSourceList, dateFrom: compareFrom, dateTo: compareTo });
-    compare = { ncs: c.ncs, amount: c.amount };
+    compare = { ncs: adj(c.ncs, ncFactor), amount: adj(c.amount, revFactor) };
   }
   return {
-    primary: { ncs: primary.ncs, amount: primary.amount },
+    primary: { ncs: adj(primary.ncs, ncFactor), amount: adj(primary.amount, revFactor) },
     compare,
   };
 }
@@ -518,7 +525,14 @@ async function mergeRedshiftMetrics(rows: Row[], brandId: number, from: string, 
       rs = byName.get(row.campaign_name.toLowerCase())
         ?? byNormName.get(normalize(row.campaign_name));
     }
-    return { ...row, metrics: attachRedshiftMetrics(row.metrics, rs ?? { ncs: 0, amount: 0 }) };
+    return {
+      ...row,
+      metrics: attachRedshiftMetrics(
+        row.metrics,
+        rs ?? { ncs: 0, amount: 0 },
+        { nc: brand?.rto_factor ?? 0, revenue: brand?.revenue_rto_factor ?? brand?.rto_factor ?? 0 },
+      ),
+    };
   });
 
   // Synthesize "Other [Channel]" rows for residual Redshift rows that didn't

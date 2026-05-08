@@ -48,6 +48,7 @@ export const api = {
         id: number;
         name: string;
         rto_factor: number;
+        revenue_rto_factor: number | null;
         rto_mode: string;
         accounts: Array<{ customer_id: string; customer_name: string | null }>;
       }>;
@@ -388,6 +389,7 @@ export interface CampaignBreakdown {
 export interface BrandPayload {
   name: string;
   rto_factor: number;
+  revenue_rto_factor?: number;
   rto_mode: 'flat' | 'csv' | 'redshift';
   account_ids: string[];
 }
