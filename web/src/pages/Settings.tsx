@@ -205,17 +205,19 @@ function BrandForm({ accounts, initial, onCancel, onSave }: FormProps) {
           </div>
           <div className="grid grid-cols-3 gap-3">
             <div>
-              <label className="block text-sm font-medium mb-1">NC RTO %</label>
+              <label className="block text-sm font-medium mb-1">NC RTO % (Google)</label>
               <input
                 type="number" min={0} max={100} step="0.1"
                 value={rtoFactor}
                 onChange={(e) => setRtoFactor(Number(e.target.value))}
                 className="w-full border rounded px-3 py-2"
               />
-              <p className="text-xs text-gray-500 mt-1">% of NCs cancelled (RTO).</p>
+              <p className="text-xs text-gray-500 mt-1">
+                % of <strong>Google-attributed</strong> NCs that get cancelled (RTO). Enter your tracked Google-specific RTO rate.
+              </p>
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Revenue RTO %</label>
+              <label className="block text-sm font-medium mb-1">Revenue RTO % (Google)</label>
               <input
                 type="number" min={0} max={100} step="0.1"
                 value={revenueRtoFactor}
@@ -223,7 +225,9 @@ function BrandForm({ accounts, initial, onCancel, onSave }: FormProps) {
                 className="w-full border rounded px-3 py-2"
                 placeholder="defaults to NC RTO %"
               />
-              <p className="text-xs text-gray-500 mt-1">% of revenue lost. Often higher than NC RTO % because high-AOV orders RTO more. Leave blank to mirror NC %.</p>
+              <p className="text-xs text-gray-500 mt-1">
+                % of <strong>Google revenue</strong> lost. Often higher than NC % because higher-AOV orders RTO more (drags AOV down further). Leave blank to mirror NC %.
+              </p>
             </div>
             <div>
               <label className="block text-sm font-medium mb-1">RTO mode</label>
@@ -236,6 +240,9 @@ function BrandForm({ accounts, initial, onCancel, onSave }: FormProps) {
                 <option value="redshift">Redshift live</option>
                 <option value="csv" disabled>CSV upload (coming)</option>
               </select>
+              <p className="text-xs text-gray-500 mt-1">
+                Redshift mode uses funnel data (UTM-matched to Google) for NCs/revenue, then applies the RTO % above.
+              </p>
             </div>
           </div>
           <div>
