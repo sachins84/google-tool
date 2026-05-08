@@ -77,7 +77,7 @@ export function Insights({ brandId, brandName, from, to, compareFrom, compareTo 
           For free-form Q&A, connect this tool's MCP server to Claude.ai instead of running queries here. Claude.ai can pull live data from the same source and reason across multiple tools (e.g. cross-checking with your meta-tool MCP).
         </p>
         <div className="font-mono text-xs bg-white border rounded px-3 py-2 text-gray-800">
-          MCP endpoint: <code>http://localhost:4000/mcp</code> &nbsp;·&nbsp; Available tools:
+          MCP endpoint: <code>http://localhost:5011/mcp</code> &nbsp;·&nbsp; Available tools:
           <code> list_brands</code>, <code>list_accessible_accounts</code>, <code>get_campaigns</code>, <code>get_network_split</code>, <code>get_daily_insights</code>, <code>get_audit_log</code>
         </div>
         <p className="text-xs text-blue-800">
