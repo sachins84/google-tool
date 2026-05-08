@@ -62,11 +62,23 @@ export interface FetchOptions {
   dateTo: string;                  // 'YYYY-MM-DD'
 }
 
+/**
+ * Build a SQL fragment that matches any utm_source pattern in the list.
+ * Patterns containing '%' or '_' are treated as ILIKE; otherwise as exact match.
+ * Falls back to a plain `false` clause when the list is empty so callers don't
+ * accidentally fetch all rows.
+ */
+function utmSourceClause(list: string[], paramOffset: number): { sql: string; params: string[] } {
+  if (!list.length) return { sql: 'false', params: [] };
+  const parts = list.map((_, i) => `utm_source ILIKE $${paramOffset + i}`);
+  return { sql: '(' + parts.join(' OR ') + ')', params: list };
+}
+
 /** Fetch per-(utm_source, utm_campaign) metrics aggregated over the date range. */
 export async function fetchByCampaign(opts: FetchOptions): Promise<FunnelMetricsByCampaign[]> {
   const client = await getPool().connect();
   try {
-    const placeholders = opts.utmSourceList.map((_, i) => `$${i + 3}`).join(', ');
+    const { sql: srcSql, params: srcParams } = utmSourceClause(opts.utmSourceList, 3);
     const sql = `
       SELECT
         utm_source,
@@ -80,11 +92,11 @@ export async function fetchByCampaign(opts: FetchOptions): Promise<FunnelMetrics
              ELSE 0 END                                                          AS prepaid_pct
       FROM ${opts.funnelTable}
       WHERE dt BETWEEN $1 AND $2
-        AND utm_source IN (${placeholders})
+        AND ${srcSql}
         AND utm_campaign IS NOT NULL AND utm_campaign <> ''
       GROUP BY utm_source, utm_campaign
     `;
-    const result = await client.query(sql, [opts.dateFrom, opts.dateTo, ...opts.utmSourceList]);
+    const result = await client.query(sql, [opts.dateFrom, opts.dateTo, ...srcParams]);
     return result.rows.map((r) => ({
       utm_source: String(r.utm_source),
       utm_campaign: String(r.utm_campaign),
@@ -103,7 +115,7 @@ export async function fetchByCampaign(opts: FetchOptions): Promise<FunnelMetrics
 export async function fetchTotal(opts: FetchOptions): Promise<FunnelMetricsTotal> {
   const client = await getPool().connect();
   try {
-    const placeholders = opts.utmSourceList.map((_, i) => `$${i + 3}`).join(', ');
+    const { sql: srcSql, params: srcParams } = utmSourceClause(opts.utmSourceList, 3);
     const sql = `
       SELECT
         SUM(converted)::BIGINT                                                   AS ncs,
@@ -113,9 +125,9 @@ export async function fetchTotal(opts: FetchOptions): Promise<FunnelMetricsTotal
         COUNT(*)::BIGINT                                                         AS rows
       FROM ${opts.funnelTable}
       WHERE dt BETWEEN $1 AND $2
-        AND utm_source IN (${placeholders})
+        AND ${srcSql}
     `;
-    const r = (await client.query(sql, [opts.dateFrom, opts.dateTo, ...opts.utmSourceList])).rows[0];
+    const r = (await client.query(sql, [opts.dateFrom, opts.dateTo, ...srcParams])).rows[0];
     const ncs = Number(r?.ncs ?? 0);
     const prepaid = Number(r?.prepaid_purchases ?? 0);
     return {

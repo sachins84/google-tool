@@ -12,24 +12,15 @@ interface BrandPreset {
 }
 
 // All keys MUST be normalized via normalizeBrandName().
+// utm_source_list values may contain SQL wildcards (% / _) — matched via ILIKE in
+// services/redshift.ts. 'google%' catches every variant (google, google_Pmax,
+// google_Search, google_pla, google_DG, google_Pmax_RM, google_Pmax-MM02, plus
+// any future suffixed variants — including malformed strings like
+// 'google_Pmax&utm_source=...' from URL-chain bugs).
 const PRESETS: Record<string, BrandPreset> = {
-  littlejoys: {
-    funnel_table: 'mw_nexus.lj_funnel_daily',
-    utm_source_list: ['google_Pmax', 'google_Search', 'google_DG', 'google_pla', 'google_Pmax_RM', 'google'],
-  },
-  manmatters: {
-    funnel_table: 'mw_nexus.mm_funnel_daily',
-    utm_source_list: [
-      'google_Pmax', 'google_Pmax-MM02', 'google_Pmax-MM03',
-      'google_Search', 'google_DG',
-      'google_pla', 'google_pla_03',
-      'google',
-    ],
-  },
-  bebodywise: {
-    funnel_table: 'mw_nexus.bw_funnel_daily',
-    utm_source_list: ['google_Pmax', 'google_Search', 'google_DG', 'google_pla', 'google'],
-  },
+  littlejoys:  { funnel_table: 'mw_nexus.lj_funnel_daily', utm_source_list: ['google%'] },
+  manmatters:  { funnel_table: 'mw_nexus.mm_funnel_daily', utm_source_list: ['google%'] },
+  bebodywise:  { funnel_table: 'mw_nexus.bw_funnel_daily', utm_source_list: ['google%'] },
 };
 
 /** Strip non-alphanumerics + lowercase so 'Be Bodywise' / 'BeBodywise' / 'be-bodywise' all match. */
