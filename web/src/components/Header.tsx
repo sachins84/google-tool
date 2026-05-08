@@ -85,7 +85,7 @@ export function Header({ username, view, state, brands, onState, onView, onLogou
         </select>
 
         <div className="flex items-center gap-1 text-sm">
-          {(['today', 'yesterday', 'last_7', 'last_14', 'last_30', 'mtd'] as Preset[]).map((p) => (
+          {(['today', 'yesterday', 'last_3', 'last_7', 'last_14', 'last_30', 'mtd'] as Preset[]).map((p) => (
             <button
               key={p}
               onClick={() => applyPreset(p)}
@@ -161,6 +161,7 @@ function labelFor(p: Preset): string {
   switch (p) {
     case 'today': return 'Today';
     case 'yesterday': return 'Yest';
+    case 'last_3': return '3d';
     case 'last_7': return '7d';
     case 'last_14': return '14d';
     case 'last_30': return '30d';

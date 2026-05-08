@@ -126,8 +126,6 @@ export function MetricsTable({ level, rows, hasCompare, showCalcMetrics = false,
               {showCalcMetrics && header('AOV', 'aov', 'right')}
               {showCalcMetrics && header('Calc CPA', 'calc_cpa', 'right')}
               {showCalcMetrics && header('Calc ROAS', 'calc_roas', 'right')}
-              {hasCompare && <th className="px-3 py-2 font-medium text-right text-gray-600">Δ Spend</th>}
-              {hasCompare && <th className="px-3 py-2 font-medium text-right text-gray-600">Δ ROAS</th>}
               {onAction && <th className="px-3 py-2 font-medium text-right text-gray-600">Actions</th>}
             </tr>
           </thead>
@@ -179,29 +177,19 @@ export function MetricsTable({ level, rows, hasCompare, showCalcMetrics = false,
                     </td>
                   )}
                   <td className="px-3 py-2 text-xs"><StatusPill status={r.status} /></td>
-                  <td className="px-3 py-2 text-right">{fmtINR(m.cost)}</td>
-                  <td className="px-3 py-2 text-right">{fmtNum(m.impressions)}</td>
-                  <td className="px-3 py-2 text-right">{fmtNum(m.clicks)}</td>
-                  <td className="px-3 py-2 text-right">{fmtPct(m.ctr)}</td>
-                  <td className="px-3 py-2 text-right">{fmtINR(m.cpc)}</td>
-                  <td className="px-3 py-2 text-right">{fmtINR(m.cpm)}</td>
-                  <td className="px-3 py-2 text-right">{fmtNum(m.conversions, 0)}</td>
-                  <td className="px-3 py-2 text-right">{fmtINR(m.cpa)}</td>
-                  <td className="px-3 py-2 text-right font-medium">{fmtMul(m.roas_pre_rto)}</td>
-                  {showCalcMetrics && <td className="px-3 py-2 text-right">{m.ncs != null ? fmtNum(m.ncs, 0) : '—'}</td>}
-                  {showCalcMetrics && <td className="px-3 py-2 text-right">{m.aov != null ? fmtINR(m.aov) : '—'}</td>}
-                  {showCalcMetrics && <td className="px-3 py-2 text-right">{m.calc_cpa != null ? fmtINR(m.calc_cpa) : '—'}</td>}
-                  {showCalcMetrics && <td className="px-3 py-2 text-right font-medium text-emerald-700">{m.calc_roas != null ? fmtMul(m.calc_roas) : '—'}</td>}
-                  {hasCompare && (
-                    <td className={`px-3 py-2 text-right ${deltaTone(m.cost, c?.cost, false)}`}>
-                      {fmtDelta(m.cost, c?.cost, 'pct')}
-                    </td>
-                  )}
-                  {hasCompare && (
-                    <td className={`px-3 py-2 text-right ${deltaTone(m.roas_post_rto, c?.roas_post_rto, true)}`}>
-                      {fmtDelta(m.roas_post_rto, c?.roas_post_rto, 'absolute')}
-                    </td>
-                  )}
+                  <MetricCell value={m.cost} prev={c?.cost} fmt={fmtINR} betterIs="lower" deltaKind="pct" hasCompare={hasCompare} />
+                  <MetricCell value={m.impressions} prev={c?.impressions} fmt={fmtNum} betterIs="neutral" deltaKind="pct" hasCompare={hasCompare} />
+                  <MetricCell value={m.clicks} prev={c?.clicks} fmt={fmtNum} betterIs="higher" deltaKind="pct" hasCompare={hasCompare} />
+                  <MetricCell value={m.ctr} prev={c?.ctr} fmt={fmtPct} betterIs="higher" deltaKind="absolute" hasCompare={hasCompare} />
+                  <MetricCell value={m.cpc} prev={c?.cpc} fmt={fmtINR} betterIs="lower" deltaKind="pct" hasCompare={hasCompare} />
+                  <MetricCell value={m.cpm} prev={c?.cpm} fmt={fmtINR} betterIs="lower" deltaKind="pct" hasCompare={hasCompare} />
+                  <MetricCell value={m.conversions} prev={c?.conversions} fmt={(n) => fmtNum(n, 0)} betterIs="higher" deltaKind="pct" hasCompare={hasCompare} />
+                  <MetricCell value={m.cpa} prev={c?.cpa} fmt={fmtINR} betterIs="lower" deltaKind="pct" hasCompare={hasCompare} />
+                  <MetricCell value={m.roas_pre_rto} prev={c?.roas_pre_rto} fmt={fmtMul} betterIs="higher" deltaKind="absolute" hasCompare={hasCompare} bold />
+                  {showCalcMetrics && <MetricCell value={m.ncs} prev={c?.ncs ?? null} fmt={(n) => fmtNum(n, 0)} betterIs="higher" deltaKind="pct" hasCompare={hasCompare} nullable />}
+                  {showCalcMetrics && <MetricCell value={m.aov} prev={c?.aov ?? null} fmt={fmtINR} betterIs="higher" deltaKind="pct" hasCompare={hasCompare} nullable />}
+                  {showCalcMetrics && <MetricCell value={m.calc_cpa} prev={c?.calc_cpa ?? null} fmt={fmtINR} betterIs="lower" deltaKind="pct" hasCompare={hasCompare} nullable />}
+                  {showCalcMetrics && <MetricCell value={m.calc_roas} prev={c?.calc_roas ?? null} fmt={fmtMul} betterIs="higher" deltaKind="absolute" hasCompare={hasCompare} bold className="text-emerald-700" nullable />}
                   {onAction && (
                     <td className="px-3 py-2 text-right relative">
                       <button
@@ -292,6 +280,58 @@ function StatusPill({ status }: { status?: string }) {
 function QsPill({ qs }: { qs: number }) {
   const tone = qs >= 7 ? 'bg-emerald-100 text-emerald-800' : qs >= 4 ? 'bg-amber-100 text-amber-800' : 'bg-red-100 text-red-800';
   return <span className={`inline-block px-2 py-0.5 rounded text-[11px] font-medium ${tone}`}>{qs}</span>;
+}
+
+interface MetricCellProps {
+  value: number | null | undefined;
+  prev: number | null | undefined;
+  fmt: (n: number) => string;
+  betterIs: 'higher' | 'lower' | 'neutral';
+  deltaKind: 'pct' | 'absolute';
+  hasCompare: boolean;
+  bold?: boolean;
+  nullable?: boolean;
+  className?: string;
+}
+
+function MetricCell({ value, prev, fmt, betterIs, deltaKind, hasCompare, bold, nullable, className }: MetricCellProps) {
+  if (nullable && (value == null || !Number.isFinite(value))) {
+    return <td className="px-3 py-2 text-right text-gray-400">—</td>;
+  }
+  const v = (value ?? 0) as number;
+  const p = (prev ?? null) as number | null;
+  const showDelta = hasCompare && p != null && Number.isFinite(p);
+
+  let deltaStr = '';
+  let toneClass = 'text-gray-400';
+  if (showDelta) {
+    if (deltaKind === 'pct') {
+      if (p === 0) {
+        deltaStr = v === 0 ? '—' : '+∞%';
+      } else {
+        const pct = (v - p) / p;
+        deltaStr = `${pct >= 0 ? '+' : ''}${(pct * 100).toFixed(0)}%`;
+        if (betterIs !== 'neutral') {
+          const better = betterIs === 'higher' ? pct > 0 : pct < 0;
+          toneClass = better ? 'text-emerald-600' : pct === 0 ? 'text-gray-400' : 'text-red-600';
+        }
+      }
+    } else {
+      const d = v - p;
+      deltaStr = `${d >= 0 ? '+' : ''}${d.toFixed(2)}`;
+      if (betterIs !== 'neutral') {
+        const better = betterIs === 'higher' ? d > 0 : d < 0;
+        toneClass = better ? 'text-emerald-600' : d === 0 ? 'text-gray-400' : 'text-red-600';
+      }
+    }
+  }
+
+  return (
+    <td className={`px-3 py-2 text-right ${className ?? ''}`}>
+      <div className={bold ? 'font-medium' : ''}>{fmt(v)}</div>
+      {showDelta && <div className={`text-[10px] ${toneClass}`}>{deltaStr}</div>}
+    </td>
+  );
 }
 
 function StrengthPill({ strength }: { strength?: string }) {

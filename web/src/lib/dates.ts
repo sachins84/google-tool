@@ -11,7 +11,7 @@ function addDays(d: Date, days: number): Date {
   return copy;
 }
 
-export type Preset = 'last_7' | 'last_14' | 'last_30' | 'mtd' | 'today' | 'yesterday' | 'custom';
+export type Preset = 'last_3' | 'last_7' | 'last_14' | 'last_30' | 'mtd' | 'today' | 'yesterday' | 'custom';
 
 export interface DateRange {
   from: string;
@@ -24,9 +24,12 @@ export function rangeForPreset(preset: Preset, today = new Date()): DateRange {
   const yesterday = addDays(today, -1);
   switch (preset) {
     case 'today':
-      return { from: isoDate(today), to: isoDate(today) };
+      // Compare today (in-progress) to yesterday (full day) — same convention Google Ads UI uses
+      return rangeWithCompare(today, today);
     case 'yesterday':
-      return { from: isoDate(yesterday), to: isoDate(yesterday) };
+      return rangeWithCompare(yesterday, yesterday);
+    case 'last_3':
+      return rangeWithCompare(addDays(yesterday, -2), yesterday);
     case 'last_7':
       return rangeWithCompare(addDays(yesterday, -6), yesterday);
     case 'last_14':
