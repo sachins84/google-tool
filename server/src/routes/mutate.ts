@@ -50,6 +50,34 @@ const positiveKwSchema = baseSchema.extend({
   match_type: z.enum(['EXACT', 'PHRASE', 'BROAD']).default('BROAD'),
 });
 
+const updateSettingsSchema = baseSchema.extend({
+  action: z.literal('update_campaign_settings'),
+  campaign_id: z.string(),
+  // any combo of these may be passed; only changed fields are sent to Google
+  name: z.string().min(1).optional(),
+  start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  target_roas: z.number().min(0.5).max(10).optional(), // ratio (e.g. 4.0 = 400%)
+  target_cpa_inr: z.number().min(0).optional(),
+});
+
+const createCampaignSchema = baseSchema.extend({
+  action: z.literal('create_search_campaign'),
+  name: z.string().min(1).max(255),
+  daily_budget_inr: z.number().min(50),
+  bid_strategy: z.enum(['MAXIMIZE_CONVERSIONS', 'MAXIMIZE_CONVERSION_VALUE', 'TARGET_CPA', 'TARGET_ROAS']).default('MAXIMIZE_CONVERSIONS'),
+  target_cpa_inr: z.number().min(0).optional(),
+  target_roas: z.number().min(0.5).max(10).optional(),
+  start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  // Targeting (defaults: India, English+Hindi). Geo IDs are Google's geo_target_constant IDs.
+  geo_target_ids: z.array(z.string()).default(['2356']), // 2356 = India
+  language_ids: z.array(z.string()).default(['1000', '1023']), // 1000 = English, 1023 = Hindi
+  // Network settings (Search default; partner network optional)
+  search_partners: z.boolean().default(false),
+  content_network: z.boolean().default(false),
+});
+
 // PMax asset operations — text assets are immutable, so "modify" = remove + add
 const ASSET_FIELD_TYPES = [
   'HEADLINE', 'LONG_HEADLINE', 'DESCRIPTION', 'BUSINESS_NAME',
@@ -88,6 +116,8 @@ const requestSchema = z.discriminatedUnion('action', [
   assetStatusSchema.extend({ action: z.literal('enable_asset') }),
   assetStatusSchema.extend({ action: z.literal('remove_asset') }),
   addTextAssetSchema,
+  updateSettingsSchema,
+  createCampaignSchema,
 ]);
 
 const MICROS = 1_000_000;
@@ -270,6 +300,128 @@ export async function mutateRoutes(app: FastifyInstance): Promise<void> {
         }];
         actionLabel = 'add_keyword';
         after = { text: body.text, match_type: body.match_type };
+      } else if (body.action === 'update_campaign_settings') {
+        target = `customers/${body.customer_id}/campaigns/${body.campaign_id}`;
+        const update: Record<string, unknown> = { resourceName: target };
+        const updateMaskParts: string[] = [];
+        if (body.name) { update.name = body.name; updateMaskParts.push('name'); }
+        if (body.start_date) { update.startDate = body.start_date; updateMaskParts.push('start_date'); }
+        if (body.end_date) { update.endDate = body.end_date; updateMaskParts.push('end_date'); }
+        if (body.target_roas != null) {
+          // For TARGET_ROAS bid strategy: Google expects target_roas as a fraction (e.g. 4.0)
+          update.maximizeConversionValue = { targetRoas: body.target_roas };
+          updateMaskParts.push('maximize_conversion_value.target_roas');
+        }
+        if (body.target_cpa_inr != null) {
+          update.maximizeConversions = { targetCpaMicros: String(Math.round(body.target_cpa_inr * MICROS)) };
+          updateMaskParts.push('maximize_conversions.target_cpa_micros');
+        }
+        if (updateMaskParts.length === 0) {
+          return reply.code(400).send({ error: 'No fields to update — pass at least one of: name, start_date, end_date, target_roas, target_cpa_inr' });
+        }
+        operations = [{
+          campaignOperation: { update, updateMask: updateMaskParts.join(',') },
+        }];
+        actionLabel = 'update_campaign_settings';
+        after = {
+          ...(body.name ? { name: body.name } : {}),
+          ...(body.start_date ? { start_date: body.start_date } : {}),
+          ...(body.end_date ? { end_date: body.end_date } : {}),
+          ...(body.target_roas != null ? { target_roas: body.target_roas } : {}),
+          ...(body.target_cpa_inr != null ? { target_cpa_inr: body.target_cpa_inr } : {}),
+        };
+      } else if (body.action === 'create_search_campaign') {
+        // Two-op batch: create budget then campaign that references it via temp resource name
+        const tempBudget = `customers/${body.customer_id}/campaignBudgets/-1`;
+        target = `customers/${body.customer_id}/campaigns/-2`;
+
+        const campaign: Record<string, unknown> = {
+          resourceName: target,
+          name: body.name,
+          status: 'PAUSED', // safer default — user enables after review
+          advertisingChannelType: 'SEARCH',
+          campaignBudget: tempBudget,
+          networkSettings: {
+            targetGoogleSearch: true,
+            targetSearchNetwork: body.search_partners,
+            targetContentNetwork: body.content_network,
+            targetPartnerSearchNetwork: false,
+          },
+          // EU political advertising is a required disclosure field. We default to
+          // "does not contain" — caller may override later via update if needed.
+          containsEuPoliticalAdvertising: 'DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING',
+        };
+        if (body.start_date) campaign.startDate = body.start_date;
+        if (body.end_date) campaign.endDate = body.end_date;
+
+        // Bid strategy
+        switch (body.bid_strategy) {
+          case 'MAXIMIZE_CONVERSIONS':
+            campaign.maximizeConversions = body.target_cpa_inr != null
+              ? { targetCpaMicros: String(Math.round(body.target_cpa_inr * MICROS)) }
+              : {};
+            break;
+          case 'MAXIMIZE_CONVERSION_VALUE':
+            campaign.maximizeConversionValue = body.target_roas != null
+              ? { targetRoas: body.target_roas }
+              : {};
+            break;
+          case 'TARGET_CPA':
+            if (body.target_cpa_inr == null) return reply.code(400).send({ error: 'target_cpa_inr required for TARGET_CPA bid strategy' });
+            campaign.targetCpa = { targetCpaMicros: String(Math.round(body.target_cpa_inr * MICROS)) };
+            break;
+          case 'TARGET_ROAS':
+            if (body.target_roas == null) return reply.code(400).send({ error: 'target_roas required for TARGET_ROAS bid strategy' });
+            campaign.targetRoas = { targetRoas: body.target_roas };
+            break;
+        }
+
+        operations = [
+          {
+            campaignBudgetOperation: {
+              create: {
+                resourceName: tempBudget,
+                name: `${body.name} budget`,
+                amountMicros: String(Math.round(body.daily_budget_inr * MICROS)),
+                deliveryMethod: 'STANDARD',
+                explicitlyShared: false,
+              },
+            },
+          },
+          { campaignOperation: { create: campaign } },
+        ];
+
+        // Geo + language criteria — created as separate operations after the campaign
+        for (const geoId of body.geo_target_ids) {
+          operations.push({
+            campaignCriterionOperation: {
+              create: {
+                campaign: target,
+                location: { geoTargetConstant: `geoTargetConstants/${geoId}` },
+              },
+            },
+          });
+        }
+        for (const langId of body.language_ids) {
+          operations.push({
+            campaignCriterionOperation: {
+              create: {
+                campaign: target,
+                language: { languageConstant: `languageConstants/${langId}` },
+              },
+            },
+          });
+        }
+
+        actionLabel = 'create_search_campaign';
+        after = {
+          name: body.name,
+          daily_budget_inr: body.daily_budget_inr,
+          bid_strategy: body.bid_strategy,
+          target_cpa_inr: body.target_cpa_inr,
+          target_roas: body.target_roas,
+          status: 'PAUSED',
+        };
       } else {
         // add_negative_keyword
         if (body.scope === 'campaign') {

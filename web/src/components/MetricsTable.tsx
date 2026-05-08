@@ -7,8 +7,9 @@ export type TableLevel = 'campaign' | 'ad_group' | 'asset_group' | 'ad' | 'keywo
 export type RowAction =
   | { kind: 'pause' | 'enable'; level: 'campaign' | 'ad_group' | 'asset_group' | 'ad' | 'keyword'; row: PerfRow }
   | { kind: 'update_budget'; row: PerfRow }
-  | { kind: 'add_negative'; row: PerfRow } // for search terms
-  | { kind: 'add_keyword'; row: PerfRow }; // synthesized from drill state, not from a real row
+  | { kind: 'add_negative'; row: PerfRow } // for search terms / keywords
+  | { kind: 'add_keyword'; row: PerfRow } // synthesized from drill state
+  | { kind: 'edit_campaign'; row: PerfRow }; // edit settings (name, dates, bid targets)
 
 interface Props {
   level: TableLevel;
@@ -228,6 +229,11 @@ export function MetricsTable({ level, rows, hasCompare, showCalcMetrics = false,
                           {level === 'campaign' && (
                             <ActionButton onClick={() => { setOpenActionsFor(null); onAction({ kind: 'update_budget', row: r }); }}>
                               Update budget…
+                            </ActionButton>
+                          )}
+                          {level === 'campaign' && (
+                            <ActionButton onClick={() => { setOpenActionsFor(null); onAction({ kind: 'edit_campaign', row: r }); }}>
+                              Edit settings…
                             </ActionButton>
                           )}
                           {level === 'search_term' && (

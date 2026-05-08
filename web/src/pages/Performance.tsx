@@ -7,6 +7,8 @@ import { Assets } from './Assets';
 import { Filters, applyFilters, defaultFilterState, type FilterState } from '../components/Filters';
 import { NetworkSplit } from '../components/NetworkSplit';
 import { CampaignBreakdownPanel } from '../components/CampaignBreakdown';
+import { EditCampaignModal } from '../components/EditCampaignModal';
+import { CreateCampaignModal } from '../components/CreateCampaignModal';
 import type { NetworkSplitEntry } from '../lib/api';
 
 interface Props {
@@ -65,6 +67,8 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<RowAction | null>(null);
+  const [editCampaign, setEditCampaign] = useState<PerfRow | null>(null);
+  const [creating, setCreating] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
   const [filter, setFilter] = useState<FilterState>(defaultFilterState());
   const [brandTotals, setBrandTotals] = useState<{
@@ -163,6 +167,10 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
   }
 
   function handleAction(action: RowAction) {
+    if (action.kind === 'edit_campaign') {
+      setEditCampaign(action.row);
+      return;
+    }
     setPendingAction(action);
   }
 
@@ -345,6 +353,14 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
               + Add keyword
             </button>
           )}
+          {tab === 'campaigns' && !drill.campaignId && (
+            <button
+              onClick={() => setCreating(true)}
+              className="text-sm bg-black text-white px-3 py-1.5 rounded hover:opacity-90 whitespace-nowrap"
+            >
+              + New campaign
+            </button>
+          )}
         </div>
       )}
 
@@ -389,6 +405,27 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
           onClose={() => setPendingAction(null)}
           onSuccess={() => {
             setPendingAction(null);
+            setRefreshTick((n) => n + 1);
+          }}
+        />
+      )}
+      {editCampaign && (
+        <EditCampaignModal
+          brandId={brandId}
+          row={editCampaign}
+          onClose={() => setEditCampaign(null)}
+          onSuccess={() => {
+            setEditCampaign(null);
+            setRefreshTick((n) => n + 1);
+          }}
+        />
+      )}
+      {creating && (
+        <CreateCampaignModal
+          brandId={brandId}
+          onClose={() => setCreating(false)}
+          onSuccess={() => {
+            setCreating(false);
             setRefreshTick((n) => n + 1);
           }}
         />

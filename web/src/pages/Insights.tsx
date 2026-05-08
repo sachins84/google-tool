@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, type DailyInsight, type PerfRow } from '../lib/api';
+import { Diagnose } from '../components/Diagnose';
 
 interface Props {
   brandId: number;
@@ -11,6 +12,7 @@ interface Props {
 }
 
 export function Insights({ brandId, brandName, from, to, compareFrom, compareTo }: Props) {
+  const [rows, setRows] = useState<PerfRow[]>([]);
   const [insights, setInsights] = useState<DailyInsight[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -19,14 +21,16 @@ export function Insights({ brandId, brandName, from, to, compareFrom, compareTo 
     let cancelled = false;
     setLoading(true);
     setError(null);
-    let rows: PerfRow[] = [];
     api.perf('campaigns', { brand_id: brandId, from, to, compare_from: compareFrom, compare_to: compareTo })
-      .then((res) => { rows = res.rows; })
-      .then(() => api.insightsDaily(
-        { brand_id: brandId, from, to, compare_from: compareFrom, compare_to: compareTo },
-        rows
-      ))
-      .then((d) => { if (!cancelled) setInsights(d.insights); })
+      .then(async (res) => {
+        if (cancelled) return;
+        setRows(res.rows);
+        const d = await api.insightsDaily(
+          { brand_id: brandId, from, to, compare_from: compareFrom, compare_to: compareTo },
+          res.rows
+        );
+        if (!cancelled) setInsights(d.insights);
+      })
       .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : String(err)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -71,17 +75,12 @@ export function Insights({ brandId, brandName, from, to, compareFrom, compareTo 
         )}
       </section>
 
-      <section className="bg-blue-50 border border-blue-200 rounded p-4 text-sm space-y-2">
-        <div className="font-medium text-blue-900">Ask deeper questions in Claude.ai</div>
+      <Diagnose brandId={brandId} from={from} to={to} compareFrom={compareFrom} compareTo={compareTo} rows={rows} />
+
+      <section className="bg-blue-50 border border-blue-200 rounded p-3 text-xs space-y-1">
+        <div className="font-medium text-blue-900">Free-form Q&A — connect Claude.ai via MCP</div>
         <p className="text-blue-900">
-          For free-form Q&A, connect this tool's MCP server to Claude.ai instead of running queries here. Claude.ai can pull live data from the same source and reason across multiple tools (e.g. cross-checking with your meta-tool MCP).
-        </p>
-        <div className="font-mono text-xs bg-white border rounded px-3 py-2 text-gray-800">
-          MCP endpoint: <code>http://localhost:4000/mcp</code> &nbsp;·&nbsp; Available tools:
-          <code> list_brands</code>, <code>list_accessible_accounts</code>, <code>get_campaigns</code>, <code>get_network_split</code>, <code>get_daily_insights</code>, <code>get_audit_log</code>
-        </div>
-        <p className="text-xs text-blue-800">
-          To add: in Claude.ai → Settings → MCP servers → Add → paste the URL above. Optional: set <code>MCP_SECRET</code> in <code>.env</code> for token auth before exposing publicly.
+          For ad-hoc questions, point Claude.ai at <code className="font-mono">http://localhost:4000/mcp</code> (Settings → MCP servers). Uses your existing Claude.ai subscription, no extra API key.
         </p>
       </section>
     </div>

@@ -141,6 +141,16 @@ export const api = {
     return request<CampaignBreakdown>(`/api/campaign-breakdown?${qs.toString()}`);
   },
 
+  diagnose: (params: {
+    brand_id: number; customer_id: string; campaign_id: string;
+    metric: 'cpm' | 'cpc' | 'ctr' | 'conv_rate' | 'calc_roas' | 'calc_cpa' | 'cpa';
+    from: string; to: string; compare_from?: string; compare_to?: string;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params).forEach(([k, v]) => v != null && qs.set(k, String(v)));
+    return request<DiagnoseResult>(`/api/diagnose?${qs.toString()}`);
+  },
+
   assets: (params: {
     brand_id: number;
     from: string;
@@ -245,6 +255,35 @@ export type MutatePayload =
       dry_run: boolean;
     }
   | {
+      action: 'update_campaign_settings';
+      brand_id: number;
+      customer_id: string;
+      campaign_id: string;
+      name?: string;
+      start_date?: string;
+      end_date?: string;
+      target_roas?: number;
+      target_cpa_inr?: number;
+      dry_run: boolean;
+    }
+  | {
+      action: 'create_search_campaign';
+      brand_id: number;
+      customer_id: string;
+      name: string;
+      daily_budget_inr: number;
+      bid_strategy: 'MAXIMIZE_CONVERSIONS' | 'MAXIMIZE_CONVERSION_VALUE' | 'TARGET_CPA' | 'TARGET_ROAS';
+      target_cpa_inr?: number;
+      target_roas?: number;
+      start_date?: string;
+      end_date?: string;
+      geo_target_ids?: string[];
+      language_ids?: string[];
+      search_partners?: boolean;
+      content_network?: boolean;
+      dry_run: boolean;
+    }
+  | {
       action: 'pause_asset' | 'enable_asset' | 'remove_asset';
       brand_id: number;
       customer_id: string;
@@ -291,6 +330,23 @@ export interface DailyInsight {
   message: string;
   campaign_name?: string;
   detail: Record<string, unknown>;
+}
+
+export interface DiagnoseResult {
+  campaign_id: string;
+  campaign_name?: string;
+  channel_type?: string;
+  metric: string;
+  metric_label: string;
+  unit: 'INR' | '%' | 'x' | 'count';
+  current_value: number;
+  brand_avg?: number;
+  channel_avg?: number;
+  prev_period_value?: number;
+  trend: Array<{ date: string; value: number }>;
+  signals: Array<{ label: string; value: string | number; note?: string; severity?: 'info' | 'warn' | 'high' }>;
+  contributors?: Array<{ label: string; columns: string[]; rows: Array<{ name: string; metric: number; secondary?: Record<string, number | string> }> }>;
+  observations: string[];
 }
 
 export interface CampaignBreakdown {
