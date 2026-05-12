@@ -3,7 +3,7 @@
  * One source of truth for queries used by routes/campaigns, ad-groups, ads.
  */
 
-export type Level = 'campaign' | 'ad_group' | 'asset_group' | 'ad' | 'keyword' | 'search_term' | 'asset';
+export type Level = 'campaign' | 'ad_group' | 'asset_group' | 'ad' | 'keyword' | 'search_term' | 'asset' | 'audience' | 'product';
 
 interface BuildOptions {
   level: Level;
@@ -177,6 +177,60 @@ export function buildPmaxSearchTermsQuery(opts: BuildOptions): string {
   return `
     SELECT ${fields.join(', ')}
     FROM campaign_search_term_insight
+    WHERE ${where.join(' AND ')}
+  `.trim();
+}
+
+export function buildAudiencesQuery(opts: BuildOptions): string {
+  // Audience-level performance — works for Search / Demand Gen / Display campaigns with audience criteria.
+  // campaign_criterion.display_name is the human-readable label for any criterion type.
+  // The audience resource (custom audiences) is referenced by campaign_criterion.audience (string resource name);
+  // detailed-demographic / affinity / in-market categories come via user_interest.
+  const fields = [
+    'campaign.id',
+    'campaign.name',
+    'campaign.advertising_channel_type',
+    'campaign_criterion.criterion_id',
+    'campaign_criterion.type',
+    'campaign_criterion.display_name',
+    'campaign_criterion.user_interest.user_interest_category',
+    'metrics.cost_micros',
+    'metrics.impressions',
+    'metrics.clicks',
+    'metrics.conversions',
+    'metrics.conversions_value',
+  ];
+  const where = [dateClause(opts.from, opts.to)];
+  if (opts.campaignIds?.length) where.push(`campaign.id IN ${inClause(opts.campaignIds)}`);
+  return `
+    SELECT ${fields.join(', ')}
+    FROM campaign_audience_view
+    WHERE ${where.join(' AND ')}
+  `.trim();
+}
+
+export function buildProductsQuery(opts: BuildOptions): string {
+  // Shopping product-level metrics. view_through_conversions is not supported on this view.
+  const fields = [
+    'campaign.id',
+    'campaign.name',
+    'campaign.advertising_channel_type',
+    'segments.product_item_id',
+    'segments.product_title',
+    'segments.product_brand',
+    'segments.product_type_l1',
+    'segments.product_type_l2',
+    'metrics.cost_micros',
+    'metrics.impressions',
+    'metrics.clicks',
+    'metrics.conversions',
+    'metrics.conversions_value',
+  ];
+  const where = [dateClause(opts.from, opts.to)];
+  if (opts.campaignIds?.length) where.push(`campaign.id IN ${inClause(opts.campaignIds)}`);
+  return `
+    SELECT ${fields.join(', ')}
+    FROM shopping_performance_view
     WHERE ${where.join(' AND ')}
   `.trim();
 }

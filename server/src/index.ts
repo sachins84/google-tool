@@ -16,6 +16,8 @@ import { insightsRoutes } from './routes/insights.js';
 import { mcpRoutes } from './routes/mcp.js';
 import { campaignBreakdownRoutes } from './routes/campaign-breakdown.js';
 import { diagnoseRoutes } from './routes/diagnose.js';
+import { audienceRoutes } from './routes/audiences.js';
+import { productRoutes } from './routes/products.js';
 
 async function main(): Promise<void> {
   initDatabase();
@@ -42,6 +44,8 @@ async function main(): Promise<void> {
   await app.register(insightsRoutes, { prefix: '/api/insights' });
   await app.register(campaignBreakdownRoutes, { prefix: '/api/campaign-breakdown' });
   await app.register(diagnoseRoutes, { prefix: '/api/diagnose' });
+  await app.register(audienceRoutes, { prefix: '/api/audiences' });
+  await app.register(productRoutes, { prefix: '/api/products' });
 
   // MCP server — public (or token-gated via MCP_SECRET). Mounted outside /api/* so
   // it bypasses the session-cookie auth middleware.

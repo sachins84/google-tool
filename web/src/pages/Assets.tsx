@@ -12,6 +12,8 @@ interface Props {
   brandId: number;
   from: string;
   to: string;
+  compareFrom?: string;
+  compareTo?: string;
   campaignId?: string;
   assetGroupId?: string;
 }
@@ -36,7 +38,7 @@ const FIELD_TYPE_ORDER = [
   'YOUTUBE_VIDEO', 'CALL_TO_ACTION_SELECTION', 'SITELINK',
 ];
 
-export function Assets({ brandId, from, to, campaignId, assetGroupId }: Props) {
+export function Assets({ brandId, from, to, compareFrom, compareTo, campaignId, assetGroupId }: Props) {
   const [rows, setRows] = useState<AssetRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -51,12 +53,16 @@ export function Assets({ brandId, from, to, campaignId, assetGroupId }: Props) {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    api.assets({ brand_id: brandId, from, to, campaign_id: campaignId, asset_group_id: assetGroupId })
+    api.assets({
+      brand_id: brandId, from, to,
+      compare_from: compareFrom, compare_to: compareTo,
+      campaign_id: campaignId, asset_group_id: assetGroupId,
+    })
       .then((res) => { if (!cancelled) setRows(res.rows); })
       .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : String(err)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [brandId, from, to, campaignId, assetGroupId, refreshTick]);
+  }, [brandId, from, to, compareFrom, compareTo, campaignId, assetGroupId, refreshTick]);
 
   const filtered = useMemo(() => {
     return rows.filter((r) => {
@@ -200,12 +206,12 @@ export function Assets({ brandId, from, to, campaignId, assetGroupId }: Props) {
                         <td className="px-4 py-1.5 text-center">
                           <PerfPill label={a.performance_label} />
                         </td>
-                        <td className="px-4 py-1.5 text-right">{m ? fmtINR(m.cost) : '—'}</td>
-                        <td className="px-4 py-1.5 text-right">{m ? fmtNum(m.impressions) : '—'}</td>
-                        <td className="px-4 py-1.5 text-right">{m ? fmtNum(m.clicks) : '—'}</td>
-                        <td className="px-4 py-1.5 text-right">{m ? fmtNum(m.conversions, 0) : '—'}</td>
-                        <td className="px-4 py-1.5 text-right">{m ? fmtINR(m.conversions_value_post_rto) : '—'}</td>
-                        <td className="px-4 py-1.5 text-right font-medium">{m ? fmtMul(m.roas_post_rto) : '—'}</td>
+                        <Cell value={m?.cost} prev={a.comparison?.cost} fmt={fmtINR} betterIs="lower" deltaKind="pct" />
+                        <Cell value={m?.impressions} prev={a.comparison?.impressions} fmt={fmtNum} betterIs="neutral" deltaKind="pct" />
+                        <Cell value={m?.clicks} prev={a.comparison?.clicks} fmt={fmtNum} betterIs="higher" deltaKind="pct" />
+                        <Cell value={m?.conversions} prev={a.comparison?.conversions} fmt={(n) => fmtNum(n, 0)} betterIs="higher" deltaKind="pct" />
+                        <Cell value={m?.conversions_value_post_rto} prev={a.comparison?.conversions_value_post_rto} fmt={fmtINR} betterIs="higher" deltaKind="pct" />
+                        <Cell value={m?.roas_post_rto} prev={a.comparison?.roas_post_rto} fmt={fmtMul} betterIs="higher" deltaKind="absolute" bold />
                         <td className="px-4 py-1.5 text-right relative">
                           <button
                             onClick={() => setOpenMenuFor(openMenuFor === rowKey ? null : rowKey)}
@@ -293,6 +299,49 @@ function StatusPill({ status }: { status?: string }) {
     : s === 'REMOVED' ? 'bg-gray-200 text-gray-600'
     : 'bg-gray-100 text-gray-700';
   return <span className={`inline-block px-2 py-0.5 rounded text-[11px] font-medium ${color}`}>{s}</span>;
+}
+
+function Cell({ value, prev, fmt, betterIs, deltaKind, bold }: {
+  value: number | null | undefined;
+  prev: number | null | undefined;
+  fmt: (n: number) => string;
+  betterIs: 'higher' | 'lower' | 'neutral';
+  deltaKind: 'pct' | 'absolute';
+  bold?: boolean;
+}) {
+  if (value == null || !Number.isFinite(value)) {
+    return <td className="px-4 py-1.5 text-right text-gray-400">—</td>;
+  }
+  const v = value;
+  const hasCompare = prev != null && Number.isFinite(prev);
+  let deltaStr = '';
+  let toneClass = 'text-gray-400';
+  if (hasCompare) {
+    if (deltaKind === 'pct') {
+      if (prev === 0) deltaStr = v === 0 ? '—' : '+∞%';
+      else {
+        const pct = (v - (prev as number)) / (prev as number);
+        deltaStr = `${pct >= 0 ? '+' : ''}${(pct * 100).toFixed(0)}%`;
+        if (betterIs !== 'neutral') {
+          const better = betterIs === 'higher' ? pct > 0 : pct < 0;
+          toneClass = better ? 'text-emerald-600' : pct === 0 ? 'text-gray-400' : 'text-red-600';
+        }
+      }
+    } else {
+      const d = v - (prev as number);
+      deltaStr = `${d >= 0 ? '+' : ''}${d.toFixed(2)}`;
+      if (betterIs !== 'neutral') {
+        const better = betterIs === 'higher' ? d > 0 : d < 0;
+        toneClass = better ? 'text-emerald-600' : d === 0 ? 'text-gray-400' : 'text-red-600';
+      }
+    }
+  }
+  return (
+    <td className="px-4 py-1.5 text-right">
+      <div className={bold ? 'font-medium' : ''}>{fmt(v)}</div>
+      {hasCompare && <div className={`text-[10px] ${toneClass}`}>{deltaStr}</div>}
+    </td>
+  );
 }
 
 function PerfPill({ label }: { label?: string }) {

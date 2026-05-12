@@ -156,6 +156,8 @@ export const api = {
     brand_id: number;
     from: string;
     to: string;
+    compare_from?: string;
+    compare_to?: string;
     campaign_id?: string;
     asset_group_id?: string;
   }) => {
@@ -163,9 +165,47 @@ export const api = {
     qs.set('brand_id', String(params.brand_id));
     qs.set('from', params.from);
     qs.set('to', params.to);
+    if (params.compare_from) qs.set('compare_from', params.compare_from);
+    if (params.compare_to) qs.set('compare_to', params.compare_to);
     if (params.campaign_id) qs.set('campaign_id', params.campaign_id);
     if (params.asset_group_id) qs.set('asset_group_id', params.asset_group_id);
     return request<{ rows: AssetRow[] }>(`/api/assets?${qs.toString()}`);
+  },
+
+  audiences: (params: {
+    brand_id: number;
+    from: string;
+    to: string;
+    compare_from?: string;
+    compare_to?: string;
+    campaign_id?: string;
+  }) => {
+    const qs = new URLSearchParams();
+    qs.set('brand_id', String(params.brand_id));
+    qs.set('from', params.from);
+    qs.set('to', params.to);
+    if (params.compare_from) qs.set('compare_from', params.compare_from);
+    if (params.compare_to) qs.set('compare_to', params.compare_to);
+    if (params.campaign_id) qs.set('campaign_id', params.campaign_id);
+    return request<{ rows: AudienceRow[] }>(`/api/audiences?${qs.toString()}`);
+  },
+
+  products: (params: {
+    brand_id: number;
+    from: string;
+    to: string;
+    compare_from?: string;
+    compare_to?: string;
+    campaign_id?: string;
+  }) => {
+    const qs = new URLSearchParams();
+    qs.set('brand_id', String(params.brand_id));
+    qs.set('from', params.from);
+    qs.set('to', params.to);
+    if (params.compare_from) qs.set('compare_from', params.compare_from);
+    if (params.compare_to) qs.set('compare_to', params.compare_to);
+    if (params.campaign_id) qs.set('campaign_id', params.campaign_id);
+    return request<{ rows: ProductRow[] }>(`/api/products?${qs.toString()}`);
   },
 
   mutate: (body: MutatePayload) =>
@@ -181,6 +221,31 @@ export const api = {
     return request<{ entries: AuditEntry[] }>(`/api/audit?${qs.toString()}`);
   },
 };
+
+export interface AudienceRow {
+  customer_id: string;
+  campaign_id?: string;
+  campaign_name?: string;
+  channel_type?: string;
+  criterion_id?: string;
+  audience_type?: string;
+  audience_label?: string;
+  metrics: DerivedMetrics;
+  comparison?: DerivedMetrics;
+}
+
+export interface ProductRow {
+  customer_id: string;
+  campaign_id?: string;
+  campaign_name?: string;
+  channel_type?: string;
+  product_id?: string;
+  product_title?: string;
+  product_brand?: string;
+  product_category?: string;
+  metrics: DerivedMetrics;
+  comparison?: DerivedMetrics;
+}
 
 export interface AssetRow {
   customer_id: string;
@@ -198,6 +263,7 @@ export interface AssetRow {
   image_url?: string;
   youtube_video_id?: string;
   metrics?: DerivedMetrics;
+  comparison?: DerivedMetrics;
 }
 
 export type AssetFieldType =

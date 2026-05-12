@@ -4,6 +4,8 @@ import { KpiStrip } from '../components/KpiStrip';
 import { MetricsTable, type RowAction, type TableLevel } from '../components/MetricsTable';
 import { MutationModal } from '../components/MutationModal';
 import { Assets } from './Assets';
+import { Audiences } from './Audiences';
+import { Products } from './Products';
 import { Filters, applyFilters, defaultFilterState, type FilterState } from '../components/Filters';
 import { NetworkSplit } from '../components/NetworkSplit';
 import { CampaignBreakdownPanel } from '../components/CampaignBreakdown';
@@ -19,7 +21,7 @@ interface Props {
   compareTo?: string;
 }
 
-type Tab = 'campaigns' | 'ad_groups' | 'asset_groups' | 'ads' | 'keywords' | 'search_terms' | 'assets';
+type Tab = 'campaigns' | 'ad_groups' | 'asset_groups' | 'ads' | 'keywords' | 'search_terms' | 'assets' | 'audiences' | 'products';
 
 interface Drill {
   campaignId?: string;
@@ -40,9 +42,13 @@ const TAB_LABELS: Record<Tab, string> = {
   keywords: 'Keywords',
   search_terms: 'Search Terms',
   assets: 'Assets',
+  audiences: 'Audiences',
+  products: 'Products',
 };
 
-const PATH_FOR_TAB: Record<Exclude<Tab, 'assets'>, 'campaigns' | 'ad-groups' | 'asset-groups' | 'ads' | 'keywords' | 'search-terms'> = {
+type StandardTab = Exclude<Tab, 'assets' | 'audiences' | 'products'>;
+
+const PATH_FOR_TAB: Record<StandardTab, 'campaigns' | 'ad-groups' | 'asset-groups' | 'ads' | 'keywords' | 'search-terms'> = {
   campaigns: 'campaigns',
   ad_groups: 'ad-groups',
   asset_groups: 'asset-groups',
@@ -51,7 +57,7 @@ const PATH_FOR_TAB: Record<Exclude<Tab, 'assets'>, 'campaigns' | 'ad-groups' | '
   search_terms: 'search-terms',
 };
 
-const LEVEL_FOR_TAB: Record<Exclude<Tab, 'assets'>, TableLevel> = {
+const LEVEL_FOR_TAB: Record<StandardTab, TableLevel> = {
   campaigns: 'campaign',
   ad_groups: 'ad_group',
   asset_groups: 'asset_group',
@@ -82,10 +88,13 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
 
   const hasCompare = !!(compareFrom && compareTo);
   const isAssetTab = tab === 'assets';
+  const isAudienceTab = tab === 'audiences';
+  const isProductTab = tab === 'products';
+  const isCustomTab = isAssetTab || isAudienceTab || isProductTab;
   const isPmaxDrill = drill.campaignChannelType === 'PERFORMANCE_MAX';
 
   useEffect(() => {
-    if (isAssetTab) return;
+    if (isCustomTab) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -95,7 +104,7 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
     const usePmaxSearchTerms = tab === 'search_terms' && isPmaxDrill && drill.campaignId;
     const promise = usePmaxSearchTerms
       ? api.pmaxSearchTerms({ brand_id: brandId, from, to, campaign_id: drill.campaignId })
-      : api.perf(PATH_FOR_TAB[tab], {
+      : api.perf(PATH_FOR_TAB[tab as StandardTab], {
           brand_id: brandId, from, to,
           compare_from: compareFrom, compare_to: compareTo,
           campaign_id: drill.campaignId, ad_group_id: drill.adGroupId, asset_group_id: drill.assetGroupId,
@@ -117,7 +126,7 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
       .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : String(err)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [brandId, from, to, compareFrom, compareTo, tab, drill.campaignId, drill.adGroupId, drill.assetGroupId, refreshTick, isAssetTab, isPmaxDrill]);
+  }, [brandId, from, to, compareFrom, compareTo, tab, drill.campaignId, drill.adGroupId, drill.assetGroupId, refreshTick, isCustomTab, isPmaxDrill]);
 
   const isPmaxSearchInsights = tab === 'search_terms' && isPmaxDrill && !!drill.campaignId;
   const filteredRows = useMemo(
@@ -206,7 +215,7 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
   // non-PMax campaigns show {ad_groups, ads, keywords, search_terms}.
   function isTabDisabled(t: Tab): { disabled: boolean; tip?: string } {
     if (!drill.campaignId) {
-      // No drill yet — only Campaigns is meaningful (Assets is too, just shows everything)
+      // No drill yet — everything works at brand level. Audiences/Products may be empty for some brands.
       return { disabled: false };
     }
     if (isPmaxDrill && (t === 'ad_groups' || t === 'ads' || t === 'keywords')) {
@@ -217,12 +226,17 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
     if (drill.campaignChannelType && !isPmaxDrill && t === 'asset_groups') {
       return { disabled: true, tip: `Asset Groups are PMax-only (this is ${drill.campaignChannelType.replace('_', ' ')})` };
     }
+    // Products only meaningful for Shopping / PMax campaigns
+    if (drill.campaignChannelType && t === 'products'
+      && drill.campaignChannelType !== 'SHOPPING' && drill.campaignChannelType !== 'PERFORMANCE_MAX') {
+      return { disabled: true, tip: 'Product-level data is Shopping/PMax only' };
+    }
     return { disabled: false };
   }
 
   return (
     <div className="space-y-5">
-      {!isAssetTab && (
+      {!isCustomTab && (
         <>
           <KpiStrip
             rows={filteredRows}
@@ -326,7 +340,7 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
         </div>
       )}
 
-      {!isAssetTab && (
+      {!isCustomTab && (
         <div className="flex items-center justify-between gap-3">
           <Filters
             state={filter}
@@ -377,14 +391,34 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
           brandId={brandId}
           from={from}
           to={to}
+          compareFrom={compareFrom}
+          compareTo={compareTo}
           campaignId={drill.campaignId}
           assetGroupId={drill.assetGroupId}
+        />
+      ) : isAudienceTab ? (
+        <Audiences
+          brandId={brandId}
+          from={from}
+          to={to}
+          compareFrom={compareFrom}
+          compareTo={compareTo}
+          campaignId={drill.campaignId}
+        />
+      ) : isProductTab ? (
+        <Products
+          brandId={brandId}
+          from={from}
+          to={to}
+          compareFrom={compareFrom}
+          compareTo={compareTo}
+          campaignId={drill.campaignId}
         />
       ) : loading ? (
         <div className="text-sm text-gray-500 py-8 text-center">Loading…</div>
       ) : (
         <MetricsTable
-          level={LEVEL_FOR_TAB[tab]}
+          level={LEVEL_FOR_TAB[tab as StandardTab]}
           rows={filteredRows}
           hasCompare={hasCompare}
           showCalcMetrics={hasCalcMetrics}
