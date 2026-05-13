@@ -5,6 +5,7 @@ import { getBrand } from '../services/brands.js';
 import { getLoginCustomerId } from '../services/mcc-map.js';
 import { search } from '../services/google-ads.js';
 import { buildAudiencesQuery } from '../services/gaql.js';
+import { loadUserInterestNames, userInterestLabel } from '../services/audience-enrich.js';
 import {
   addRaw, applyFlatRto, deriveMetrics, emptyRaw, parseRawFromGoogle,
   type DerivedMetrics, type RawMetrics,
@@ -46,14 +47,9 @@ function rowKey(r: Row): string {
   return `${r.customer_id}|${r.campaign_id}|${r.criterion_id}`;
 }
 
-function audienceLabel(r: RawGoogleRow): string {
+function rawLabel(r: RawGoogleRow): string {
   const cc = r.campaignCriterion;
-  return (
-    cc?.displayName
-    ?? cc?.userInterest?.userInterestCategory
-    ?? cc?.criterionId
-    ?? '—'
-  );
+  return cc?.displayName ?? cc?.userInterest?.userInterestCategory ?? cc?.criterionId ?? '—';
 }
 
 export async function audienceRoutes(app: FastifyInstance): Promise<void> {
@@ -77,12 +73,29 @@ export async function audienceRoutes(app: FastifyInstance): Promise<void> {
           try {
             const loginCustomerId = (await getLoginCustomerId(acc.customer_id)) ?? undefined;
             const raws = await search<RawGoogleRow>({ customerId: acc.customer_id, loginCustomerId, query });
-            const aggregated = new Map<string, { row: Row; raw: RawMetrics }>();
+
+            // Collect USER_INTEREST resource names so we can batch-fetch human names
+            // (Google's display_name for these is encoded like "uservertical::92901").
+            const userInterestRefs = new Set<string>();
+            for (const r of raws) {
+              const ref = r.campaignCriterion?.userInterest?.userInterestCategory;
+              if (ref) userInterestRefs.add(ref);
+            }
+            const uiNames = userInterestRefs.size
+              ? await loadUserInterestNames(acc.customer_id, userInterestRefs, loginCustomerId)
+              : new Map();
+
+            const aggregated = new Map<string, { row: Row; raw: RawMetrics; rawRow: RawGoogleRow }>();
             for (const r of raws) {
               const key = `${r.campaign?.id}|${r.campaignCriterion?.criterionId}`;
               const raw = parseRawFromGoogle(r.metrics ?? {});
               let entry = aggregated.get(key);
               if (!entry) {
+                const type = r.campaignCriterion?.type;
+                const fallback = rawLabel(r);
+                const label = type === 'USER_INTEREST'
+                  ? userInterestLabel(r.campaignCriterion?.userInterest?.userInterestCategory, uiNames, fallback)
+                  : fallback;
                 entry = {
                   row: {
                     customer_id: acc.customer_id,
@@ -90,11 +103,12 @@ export async function audienceRoutes(app: FastifyInstance): Promise<void> {
                     campaign_name: r.campaign?.name,
                     channel_type: r.campaign?.advertisingChannelType,
                     criterion_id: r.campaignCriterion?.criterionId,
-                    audience_type: r.campaignCriterion?.type,
-                    audience_label: audienceLabel(r),
+                    audience_type: type,
+                    audience_label: label,
                     metrics: applyFlatRto(deriveMetrics(emptyRaw()), brand!.rto_factor),
                   },
                   raw: emptyRaw(),
+                  rawRow: r,
                 };
                 aggregated.set(key, entry);
               }
