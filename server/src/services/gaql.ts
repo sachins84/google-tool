@@ -266,8 +266,6 @@ export function buildProductsQuery(opts: BuildOptions): string {
     'metrics.all_conversions',
     'metrics.all_conversions_value',
     'metrics.cross_device_conversions',
-    'metrics.search_impression_share',
-    'metrics.search_absolute_top_impression_share',
   ];
   const where = [dateClause(opts.from, opts.to)];
   if (opts.campaignIds?.length) where.push(`campaign.id IN ${inClause(opts.campaignIds)}`);
