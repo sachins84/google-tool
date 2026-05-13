@@ -21,6 +21,45 @@ const METRIC_FIELDS = [
   'metrics.conversions',
   'metrics.conversions_value',
   'metrics.view_through_conversions',
+  'metrics.all_conversions',
+  'metrics.all_conversions_value',
+  'metrics.cross_device_conversions',
+  'metrics.absolute_top_impression_percentage',
+  'metrics.top_impression_percentage',
+  'metrics.engagements',
+  'metrics.engagement_rate',
+  'metrics.video_views',
+  'metrics.average_cpv',
+];
+
+// Subset of METRIC_FIELDS that asset_group / asset_group_asset accept
+// (most percentage/engagement fields error on those views).
+const NARROW_METRIC_FIELDS = [
+  'metrics.cost_micros',
+  'metrics.impressions',
+  'metrics.clicks',
+  'metrics.conversions',
+  'metrics.conversions_value',
+  'metrics.view_through_conversions',
+  'metrics.all_conversions',
+  'metrics.all_conversions_value',
+  'metrics.cross_device_conversions',
+];
+
+// Impression-share fields are Search/Shopping only and apply at campaign/ad_group/keyword level.
+const SEARCH_IS_FIELDS_CAMPAIGN = [
+  'metrics.search_impression_share',
+  'metrics.search_top_impression_share',
+  'metrics.search_absolute_top_impression_share',
+  'metrics.search_budget_lost_impression_share',
+  'metrics.search_rank_lost_impression_share',
+];
+
+const SEARCH_IS_FIELDS_AD_GROUP = [
+  'metrics.search_impression_share',
+  'metrics.search_top_impression_share',
+  'metrics.search_absolute_top_impression_share',
+  'metrics.search_rank_lost_impression_share',
 ];
 
 function dateClause(from: string, to: string): string {
@@ -40,6 +79,7 @@ export function buildCampaignsQuery(opts: BuildOptions): string {
     'campaign.bidding_strategy_type',
     'campaign_budget.amount_micros',
     ...METRIC_FIELDS,
+    ...SEARCH_IS_FIELDS_CAMPAIGN,
   ];
   const where = [dateClause(opts.from, opts.to), `campaign.status != 'REMOVED'`];
   if (opts.campaignIds?.length) where.push(`campaign.id IN ${inClause(opts.campaignIds)}`);
@@ -64,7 +104,7 @@ export function buildAssetGroupsQuery(opts: BuildOptions): string {
     'asset_group.final_urls',
     'asset_group.path1',
     'asset_group.path2',
-    ...METRIC_FIELDS,
+    ...NARROW_METRIC_FIELDS,
   ];
   const where = [dateClause(opts.from, opts.to), `asset_group.status != 'REMOVED'`];
   if (opts.campaignIds?.length) where.push(`campaign.id IN ${inClause(opts.campaignIds)}`);
@@ -87,6 +127,7 @@ export function buildAdGroupsQuery(opts: BuildOptions): string {
     'ad_group.type',
     'ad_group.cpc_bid_micros',
     ...METRIC_FIELDS,
+    ...SEARCH_IS_FIELDS_AD_GROUP,
   ];
   const where = [dateClause(opts.from, opts.to), `ad_group.status != 'REMOVED'`];
   if (opts.campaignIds?.length) where.push(`campaign.id IN ${inClause(opts.campaignIds)}`);
@@ -137,6 +178,7 @@ export function buildKeywordsQuery(opts: BuildOptions): string {
     'ad_group_criterion.status',
     'ad_group_criterion.quality_info.quality_score',
     ...METRIC_FIELDS,
+    ...SEARCH_IS_FIELDS_AD_GROUP,
   ];
   const where = [
     dateClause(opts.from, opts.to),
@@ -194,11 +236,7 @@ export function buildAudiencesQuery(opts: BuildOptions): string {
     'campaign_criterion.type',
     'campaign_criterion.display_name',
     'campaign_criterion.user_interest.user_interest_category',
-    'metrics.cost_micros',
-    'metrics.impressions',
-    'metrics.clicks',
-    'metrics.conversions',
-    'metrics.conversions_value',
+    ...METRIC_FIELDS,
   ];
   const where = [dateClause(opts.from, opts.to)];
   if (opts.campaignIds?.length) where.push(`campaign.id IN ${inClause(opts.campaignIds)}`);
@@ -225,6 +263,11 @@ export function buildProductsQuery(opts: BuildOptions): string {
     'metrics.clicks',
     'metrics.conversions',
     'metrics.conversions_value',
+    'metrics.all_conversions',
+    'metrics.all_conversions_value',
+    'metrics.cross_device_conversions',
+    'metrics.search_impression_share',
+    'metrics.search_absolute_top_impression_share',
   ];
   const where = [dateClause(opts.from, opts.to)];
   if (opts.campaignIds?.length) where.push(`campaign.id IN ${inClause(opts.campaignIds)}`);
@@ -275,7 +318,7 @@ export function buildAssetsQuery(opts: BuildOptions): string {
     'asset.text_asset.text',
     'asset.image_asset.full_size.url',
     'asset.youtube_video_asset.youtube_video_id',
-    ...METRIC_FIELDS,
+    ...NARROW_METRIC_FIELDS,
   ];
   const where: string[] = [`asset_group_asset.status != 'REMOVED'`];
   // Date range is required when metric fields are selected; default to last 30 days if not provided

@@ -490,6 +490,25 @@ export interface DerivedMetrics {
   aov: number | null;
   calc_cpa: number | null;
   calc_roas: number | null;
+  // Extended Google metrics (0 when the view doesn't expose them)
+  view_through_conversions?: number;
+  all_conversions?: number;
+  all_conversions_value?: number;
+  cross_device_conversions?: number;
+  engagements?: number;
+  video_views?: number;
+  engagement_rate?: number;
+  absolute_top_impression_percentage?: number;
+  top_impression_percentage?: number;
+  search_impression_share?: number;
+  search_top_impression_share?: number;
+  search_absolute_top_impression_share?: number;
+  search_budget_lost_impression_share?: number;
+  search_rank_lost_impression_share?: number;
+  average_cpv?: number;
+  cpa_all?: number;
+  roas_all?: number;
+  conversion_rate?: number;
 }
 
 export interface PerfRow {

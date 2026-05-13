@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { api, type PerfRow } from '../lib/api';
 import { KpiStrip } from '../components/KpiStrip';
 import { MetricsTable, type RowAction, type TableLevel } from '../components/MetricsTable';
+import { MetricColumnSelector } from '../components/MetricColumnSelector';
+import { loadVisibleMetrics, saveVisibleMetrics } from '../lib/metricColumns';
 import { MutationModal } from '../components/MutationModal';
 import { Assets } from './Assets';
 import { Audiences } from './Audiences';
@@ -77,6 +79,7 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
   const [creating, setCreating] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
   const [filter, setFilter] = useState<FilterState>(defaultFilterState());
+  const [visibleMetrics, setVisibleMetrics] = useState<Set<string>>(() => loadVisibleMetrics('metrics-table'));
   const [brandTotals, setBrandTotals] = useState<{
     primary?: { ncs: number; amount: number };
     compare?: { ncs: number; amount: number };
@@ -341,7 +344,7 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
       )}
 
       {!isCustomTab && (
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
           <Filters
             state={filter}
             onChange={setFilter}
@@ -349,6 +352,13 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
             isSearchTerms={tab === 'search_terms'}
             rows={rows}
           />
+          <div className="flex items-center gap-2">
+            <MetricColumnSelector
+              visible={visibleMetrics}
+              onChange={(next) => { setVisibleMetrics(next); saveVisibleMetrics('metrics-table', next); }}
+              showCalcMetrics={hasCalcMetrics}
+            />
+          </div>
           {tab === 'keywords' && drill.adGroupId && (
             <button
               onClick={() => setPendingAction({
@@ -422,6 +432,7 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
           rows={filteredRows}
           hasCompare={hasCompare}
           showCalcMetrics={hasCalcMetrics}
+          visibleMetrics={visibleMetrics}
           onDrillIn={
             tab === 'campaigns' ? handleDrillFromCampaign
             : tab === 'ad_groups' ? handleDrillFromAdGroup

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
-import type { PerfRow } from '../lib/api';
-import { deltaTone, fmtDelta, fmtINR, fmtMul, fmtNum, fmtPct, truncate } from '../lib/format';
+import type { PerfRow, DerivedMetrics } from '../lib/api';
+import { fmtINR, fmtMul, fmtNum, fmtPct, truncate } from '../lib/format';
+import { METRIC_COLUMNS, type MetricColumn } from '../lib/metricColumns';
 
 export type TableLevel = 'campaign' | 'ad_group' | 'asset_group' | 'ad' | 'keyword' | 'search_term';
 
@@ -16,14 +17,22 @@ interface Props {
   rows: PerfRow[];
   hasCompare: boolean;
   showCalcMetrics?: boolean; // true when at least one row has Redshift NCs attached
+  visibleMetrics?: Set<string>; // which metric columns to render; defaults to all .default columns
   onDrillIn?: (row: PerfRow) => void;
   onAction?: (action: RowAction) => void;
 }
 
-type SortKey =
-  | 'name' | 'cost' | 'impressions' | 'clicks' | 'ctr' | 'cpc' | 'cpm'
-  | 'conversions' | 'cpa' | 'roas_pre_rto' | 'roas_post_rto'
-  | 'ncs' | 'aov' | 'calc_cpa' | 'calc_roas' | 'quality_score';
+type SortKey = 'name' | 'quality_score' | keyof DerivedMetrics;
+
+function fmtFor(kind: MetricColumn['fmt']): (n: number) => string {
+  switch (kind) {
+    case 'INR': return fmtINR;
+    case 'NUM': return (n: number) => fmtNum(n);
+    case 'NUM0': return (n: number) => fmtNum(n, 0);
+    case 'PCT': return (n: number) => fmtPct(n, 1);
+    case 'MUL': return fmtMul;
+  }
+}
 
 function nameOf(r: PerfRow, level: TableLevel): string {
   if (level === 'campaign') return r.campaign_name ?? '—';
@@ -34,11 +43,20 @@ function nameOf(r: PerfRow, level: TableLevel): string {
   return r.search_term ?? '—';
 }
 
-export function MetricsTable({ level, rows, hasCompare, showCalcMetrics = false, onDrillIn, onAction }: Props) {
+export function MetricsTable({ level, rows, hasCompare, showCalcMetrics = false, visibleMetrics, onDrillIn, onAction }: Props) {
   const [sortBy, setSortBy] = useState<SortKey>('cost');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [filter, setFilter] = useState('');
   const [openActionsFor, setOpenActionsFor] = useState<string | null>(null);
+
+  const cols = useMemo(() => {
+    const set = visibleMetrics ?? new Set(METRIC_COLUMNS.filter((c) => c.default).map((c) => c.key as string));
+    return METRIC_COLUMNS.filter((c) => {
+      if (!set.has(c.key as string)) return false;
+      if (c.calcOnly && !showCalcMetrics) return false;
+      return true;
+    });
+  }, [visibleMetrics, showCalcMetrics]);
 
   const sorted = useMemo(() => {
     const filtered = filter
@@ -113,19 +131,18 @@ export function MetricsTable({ level, rows, hasCompare, showCalcMetrics = false,
               )}
               {level === 'keyword' && header('QS', 'quality_score', 'right')}
               <th className="px-3 py-2 font-medium text-gray-600">Status</th>
-              {header('Spend', 'cost', 'right')}
-              {header('Impr', 'impressions', 'right')}
-              {header('Clicks', 'clicks', 'right')}
-              {header('CTR', 'ctr', 'right')}
-              {header('CPC', 'cpc', 'right')}
-              {header('CPM', 'cpm', 'right')}
-              {header('Conv', 'conversions', 'right')}
-              {header('CPA', 'cpa', 'right')}
-              {header('ROAS (G)', 'roas_pre_rto', 'right')}
-              {showCalcMetrics && header('NCs', 'ncs', 'right')}
-              {showCalcMetrics && header('AOV', 'aov', 'right')}
-              {showCalcMetrics && header('Calc CPA', 'calc_cpa', 'right')}
-              {showCalcMetrics && header('Calc ROAS', 'calc_roas', 'right')}
+              {cols.map((col) => (
+                <th
+                  key={col.key as string}
+                  className={`px-3 py-2 font-medium cursor-pointer select-none text-right ${
+                    sortBy === col.key ? 'text-black' : 'text-gray-600'
+                  }`}
+                  onClick={() => toggleSort(col.key as SortKey)}
+                  title={col.longLabel}
+                >
+                  {col.label}{sortBy === col.key && (sortDir === 'asc' ? ' ↑' : ' ↓')}
+                </th>
+              ))}
               {onAction && <th className="px-3 py-2 font-medium text-right text-gray-600">Actions</th>}
             </tr>
           </thead>
@@ -177,19 +194,24 @@ export function MetricsTable({ level, rows, hasCompare, showCalcMetrics = false,
                     </td>
                   )}
                   <td className="px-3 py-2 text-xs"><StatusPill status={r.status} /></td>
-                  <MetricCell value={m.cost} prev={c?.cost} fmt={fmtINR} betterIs="lower" deltaKind="pct" hasCompare={hasCompare} />
-                  <MetricCell value={m.impressions} prev={c?.impressions} fmt={fmtNum} betterIs="neutral" deltaKind="pct" hasCompare={hasCompare} />
-                  <MetricCell value={m.clicks} prev={c?.clicks} fmt={fmtNum} betterIs="higher" deltaKind="pct" hasCompare={hasCompare} />
-                  <MetricCell value={m.ctr} prev={c?.ctr} fmt={fmtPct} betterIs="higher" deltaKind="absolute" hasCompare={hasCompare} />
-                  <MetricCell value={m.cpc} prev={c?.cpc} fmt={fmtINR} betterIs="lower" deltaKind="pct" hasCompare={hasCompare} />
-                  <MetricCell value={m.cpm} prev={c?.cpm} fmt={fmtINR} betterIs="lower" deltaKind="pct" hasCompare={hasCompare} />
-                  <MetricCell value={m.conversions} prev={c?.conversions} fmt={(n) => fmtNum(n, 0)} betterIs="higher" deltaKind="pct" hasCompare={hasCompare} />
-                  <MetricCell value={m.cpa} prev={c?.cpa} fmt={fmtINR} betterIs="lower" deltaKind="pct" hasCompare={hasCompare} />
-                  <MetricCell value={m.roas_pre_rto} prev={c?.roas_pre_rto} fmt={fmtMul} betterIs="higher" deltaKind="absolute" hasCompare={hasCompare} bold />
-                  {showCalcMetrics && <MetricCell value={m.ncs} prev={c?.ncs ?? null} fmt={(n) => fmtNum(n, 0)} betterIs="higher" deltaKind="pct" hasCompare={hasCompare} nullable />}
-                  {showCalcMetrics && <MetricCell value={m.aov} prev={c?.aov ?? null} fmt={fmtINR} betterIs="higher" deltaKind="pct" hasCompare={hasCompare} nullable />}
-                  {showCalcMetrics && <MetricCell value={m.calc_cpa} prev={c?.calc_cpa ?? null} fmt={fmtINR} betterIs="lower" deltaKind="pct" hasCompare={hasCompare} nullable />}
-                  {showCalcMetrics && <MetricCell value={m.calc_roas} prev={c?.calc_roas ?? null} fmt={fmtMul} betterIs="higher" deltaKind="absolute" hasCompare={hasCompare} bold className="text-emerald-700" nullable />}
+                  {cols.map((col) => {
+                    const v = (m as unknown as Record<string, number | null | undefined>)[col.key as string];
+                    const p = (c as unknown as Record<string, number | null | undefined> | undefined)?.[col.key as string];
+                    return (
+                      <MetricCell
+                        key={col.key as string}
+                        value={v}
+                        prev={p ?? null}
+                        fmt={fmtFor(col.fmt)}
+                        betterIs={col.betterIs}
+                        deltaKind={col.deltaKind}
+                        hasCompare={hasCompare}
+                        bold={col.bold}
+                        nullable={col.nullable}
+                        className={col.key === 'calc_roas' ? 'text-emerald-700' : undefined}
+                      />
+                    );
+                  })}
                   {onAction && (
                     <td className="px-3 py-2 text-right relative">
                       <button
