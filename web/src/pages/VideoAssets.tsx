@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { api, type VideoAssetRow } from '../lib/api';
+import { Fragment, useEffect, useMemo, useState } from 'react';
+import { api, type VideoAssetRow, type VideoTrendPoint } from '../lib/api';
 import { fmtINR, fmtMul, fmtNum, fmtPct } from '../lib/format';
 
 interface Props {
@@ -138,6 +138,7 @@ export function VideoAssets({ brandId, from, to, compareFrom, compareTo, campaig
               <th className="px-3 py-2 font-medium">Video</th>
               <th className="px-3 py-2 font-medium text-center">Best label</th>
               <th className="px-3 py-2 font-medium text-center">Used in</th>
+              <th className="px-3 py-2 font-medium text-center">Spend trend</th>
               <SortableHead label="Spend" sortKey="cost" active={sort} setSort={setSort} />
               <SortableHead label="Impr" sortKey="impressions" active={sort} setSort={setSort} />
               <SortableHead label="Clicks" sortKey="clicks" active={sort} setSort={setSort} />
@@ -154,8 +155,8 @@ export function VideoAssets({ brandId, from, to, compareFrom, compareTo, campaig
               const c = r.comparison;
               const thumb = `https://i.ytimg.com/vi/${r.youtube_video_id}/mqdefault.jpg`;
               return (
-                <>
-                  <tr key={r.youtube_video_id} className="border-t hover:bg-gray-50">
+                <Fragment key={r.youtube_video_id}>
+                  <tr className="border-t hover:bg-gray-50">
                     <td className="px-3 py-2">
                       <button
                         onClick={() => toggle(r.youtube_video_id)}
@@ -197,6 +198,9 @@ export function VideoAssets({ brandId, from, to, compareFrom, compareTo, campaig
                         {r.usage_count} {r.usage_count === 1 ? 'group' : 'groups'}
                       </button>
                     </td>
+                    <td className="px-3 py-2">
+                      <SparkLine points={r.trend} width={100} height={32} />
+                    </td>
                     <Cell value={m?.cost} prev={c?.cost} fmt={fmtINR} betterIs="lower" deltaKind="pct" />
                     <Cell value={m?.impressions} prev={c?.impressions} fmt={fmtNum} betterIs="neutral" deltaKind="pct" />
                     <Cell value={m?.clicks} prev={c?.clicks} fmt={fmtNum} betterIs="higher" deltaKind="pct" />
@@ -222,12 +226,15 @@ export function VideoAssets({ brandId, from, to, compareFrom, compareTo, campaig
                   </tr>
                   {isOpen && (
                     <tr className="bg-gray-50">
-                      <td colSpan={11} className="px-3 py-3">
+                      <td colSpan={12} className="px-3 py-3 space-y-3">
+                        {r.trend.length > 1 && (
+                          <TrendChart points={r.trend} bucket={r.trend_bucket} />
+                        )}
                         <UsageList row={r} />
                       </td>
                     </tr>
                   )}
-                </>
+                </Fragment>
               );
             })}
           </tbody>
@@ -319,6 +326,101 @@ function sortValue(r: VideoAssetRow, key: SortKey): number {
     case 'conversions': return m.conversions ?? 0;
     case 'roas': return m.roas_post_rto ?? 0;
   }
+}
+
+function SparkLine({ points, width, height }: { points: VideoTrendPoint[]; width: number; height: number }) {
+  if (points.length < 2) {
+    return <div className="text-gray-300 text-[10px] text-center" style={{ width, height }}>—</div>;
+  }
+  const max = Math.max(...points.map((p) => p.cost), 0);
+  const min = 0; // always start at 0 so the shape reflects scale
+  const range = max - min || 1;
+  const pad = 2;
+  const innerW = width - pad * 2;
+  const innerH = height - pad * 2;
+  const xStep = points.length > 1 ? innerW / (points.length - 1) : 0;
+  const pts = points.map((p, i) => {
+    const x = pad + i * xStep;
+    const y = pad + innerH - ((p.cost - min) / range) * innerH;
+    return { x, y, p };
+  });
+  const polyline = pts.map(({ x, y }) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
+  const lastPt = pts[pts.length - 1]!;
+  const firstPt = pts[0]!;
+  const trendUp = lastPt.p.cost >= firstPt.p.cost;
+  return (
+    <svg width={width} height={height} className="block" aria-label="Spend trend">
+      <polyline
+        fill="none"
+        stroke={trendUp ? '#059669' : '#dc2626'}
+        strokeWidth="1.5"
+        points={polyline}
+      />
+      {pts.map(({ x, y, p }, i) => (
+        <circle key={i} cx={x} cy={y} r="1.5" fill={trendUp ? '#059669' : '#dc2626'}>
+          <title>{p.label}: ₹{Math.round(p.cost).toLocaleString('en-IN')}</title>
+        </circle>
+      ))}
+    </svg>
+  );
+}
+
+function TrendChart({ points, bucket }: { points: VideoTrendPoint[]; bucket: 'daily' | 'weekly' | 'monthly' }) {
+  const width = 560;
+  const height = 140;
+  const padL = 50;
+  const padR = 12;
+  const padT = 8;
+  const padB = 22;
+  const innerW = width - padL - padR;
+  const innerH = height - padT - padB;
+  const max = Math.max(...points.map((p) => p.cost), 0);
+  const range = max || 1;
+  const xStep = points.length > 1 ? innerW / (points.length - 1) : 0;
+  const pts = points.map((p, i) => ({
+    x: padL + i * xStep,
+    y: padT + innerH - (p.cost / range) * innerH,
+    p,
+  }));
+  const polyline = pts.map(({ x, y }) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
+  const xLabels = bucket === 'monthly'
+    ? points
+    : points.filter((_, i) => i % Math.ceil(points.length / 7) === 0 || i === points.length - 1);
+  const yTicks = [0, 0.5, 1].map((f) => ({ v: f * max, y: padT + innerH - f * innerH }));
+
+  return (
+    <div className="bg-white rounded border p-3">
+      <div className="text-xs text-gray-600 mb-1">
+        Spend trend — {bucket === 'daily' ? 'daily' : bucket === 'weekly' ? 'weekly buckets' : 'monthly buckets'}
+      </div>
+      <svg width={width} height={height} className="block">
+        {/* y-axis grid */}
+        {yTicks.map((t, i) => (
+          <g key={i}>
+            <line x1={padL} y1={t.y} x2={padL + innerW} y2={t.y} stroke="#f3f4f6" strokeWidth="1" />
+            <text x={padL - 6} y={t.y + 3} textAnchor="end" fontSize="9" fill="#9ca3af">
+              ₹{Math.round(t.v).toLocaleString('en-IN')}
+            </text>
+          </g>
+        ))}
+        <polyline fill="none" stroke="#2563eb" strokeWidth="2" points={polyline} />
+        {pts.map(({ x, y, p }, i) => (
+          <circle key={i} cx={x} cy={y} r="2.5" fill="#2563eb">
+            <title>{p.label}: ₹{Math.round(p.cost).toLocaleString('en-IN')}</title>
+          </circle>
+        ))}
+        {xLabels.map((p) => {
+          const i = points.indexOf(p);
+          const x = padL + i * xStep;
+          return (
+            <text key={p.label} x={x} y={height - 6} textAnchor="middle" fontSize="9" fill="#6b7280">
+              {p.label}
+            </text>
+          );
+        })}
+      </svg>
+    </div>
+  );
 }
 
 function Cell({ value, prev, fmt, betterIs, deltaKind, bold, faded }: {

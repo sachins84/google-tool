@@ -267,6 +267,13 @@ export interface VideoAssetUsage {
   conversions: number;
 }
 
+export interface VideoTrendPoint {
+  label: string;       // YYYY-MM-DD for daily/weekly, YYYY-MM for monthly
+  cost: number;
+  impressions: number;
+  clicks: number;
+}
+
 export interface VideoAssetRow {
   youtube_video_id: string;
   title?: string;
@@ -275,6 +282,8 @@ export interface VideoAssetRow {
   has_conversions_data: boolean;
   best_label?: string;
   usages: VideoAssetUsage[];
+  trend: VideoTrendPoint[];
+  trend_bucket: 'daily' | 'weekly' | 'monthly';
   metrics: DerivedMetrics;
   comparison?: DerivedMetrics;
 }

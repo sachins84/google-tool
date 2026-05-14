@@ -340,6 +340,7 @@ export function buildAssetsQuery(opts: BuildOptions): string {
  */
 export function buildPmaxVideoAssetsQuery(opts: BuildOptions): string {
   const fields = [
+    'segments.date',
     'campaign.id',
     'campaign.name',
     'campaign.advertising_channel_type',
@@ -375,6 +376,7 @@ export function buildPmaxVideoAssetsQuery(opts: BuildOptions): string {
  */
 export function buildDgVideoAssetsQuery(opts: BuildOptions): string {
   const fields = [
+    'segments.date',
     'campaign.id',
     'campaign.name',
     'campaign.advertising_channel_type',
