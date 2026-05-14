@@ -3,7 +3,7 @@
  * One source of truth for queries used by routes/campaigns, ad-groups, ads.
  */
 
-export type Level = 'campaign' | 'ad_group' | 'asset_group' | 'ad' | 'keyword' | 'search_term' | 'asset' | 'audience' | 'product';
+export type Level = 'campaign' | 'ad_group' | 'asset_group' | 'ad' | 'keyword' | 'search_term' | 'asset' | 'audience' | 'product' | 'video_asset';
 
 interface BuildOptions {
   level: Level;
@@ -327,6 +327,78 @@ export function buildAssetsQuery(opts: BuildOptions): string {
   return `
     SELECT ${fields.join(', ')}
     FROM asset_group_asset
+    WHERE ${where.join(' AND ')}
+  `.trim();
+}
+
+/**
+ * PMax-side video assets: each row is one asset-group attachment of a video.
+ * Same youtube_video_id may attach to many asset groups — we aggregate
+ * client-side. asset_group_asset returns cost / impressions / clicks
+ * attributed to the asset; conversions are NOT exposed at this level for PMax
+ * because Google's AI distributes credit at the asset_group level.
+ */
+export function buildPmaxVideoAssetsQuery(opts: BuildOptions): string {
+  const fields = [
+    'campaign.id',
+    'campaign.name',
+    'campaign.advertising_channel_type',
+    'asset_group.id',
+    'asset_group.name',
+    'asset_group_asset.performance_label',
+    'asset_group_asset.status',
+    'asset.id',
+    'asset.youtube_video_asset.youtube_video_id',
+    'asset.youtube_video_asset.youtube_video_title',
+    'metrics.cost_micros',
+    'metrics.impressions',
+    'metrics.clicks',
+  ];
+  const where: string[] = [
+    `asset_group_asset.field_type = 'YOUTUBE_VIDEO'`,
+    `asset_group_asset.status != 'REMOVED'`,
+    dateClause(opts.from, opts.to),
+  ];
+  if (opts.campaignIds?.length) where.push(`campaign.id IN ${inClause(opts.campaignIds)}`);
+  return `
+    SELECT ${fields.join(', ')}
+    FROM asset_group_asset
+    WHERE ${where.join(' AND ')}
+  `.trim();
+}
+
+/**
+ * Non-PMax video assets (Demand Gen, Video, Display): ad_group_ad_asset_view
+ * exposes per-asset cost/impressions/clicks + conversions. Rejects video-
+ * specific metrics like video_views / video_view_rate / average_cpv (those
+ * only attach to the campaign or ad_group resource for video campaigns).
+ */
+export function buildDgVideoAssetsQuery(opts: BuildOptions): string {
+  const fields = [
+    'campaign.id',
+    'campaign.name',
+    'campaign.advertising_channel_type',
+    'ad_group.id',
+    'ad_group.name',
+    'ad_group_ad_asset_view.performance_label',
+    'ad_group_ad_asset_view.field_type',
+    'asset.id',
+    'asset.youtube_video_asset.youtube_video_id',
+    'asset.youtube_video_asset.youtube_video_title',
+    'metrics.cost_micros',
+    'metrics.impressions',
+    'metrics.clicks',
+    'metrics.conversions',
+    'metrics.conversions_value',
+  ];
+  const where: string[] = [
+    `ad_group_ad_asset_view.field_type = 'YOUTUBE_VIDEO'`,
+    dateClause(opts.from, opts.to),
+  ];
+  if (opts.campaignIds?.length) where.push(`campaign.id IN ${inClause(opts.campaignIds)}`);
+  return `
+    SELECT ${fields.join(', ')}
+    FROM ad_group_ad_asset_view
     WHERE ${where.join(' AND ')}
   `.trim();
 }

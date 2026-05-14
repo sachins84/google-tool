@@ -208,6 +208,24 @@ export const api = {
     return request<{ rows: ProductRow[] }>(`/api/products?${qs.toString()}`);
   },
 
+  videoAssets: (params: {
+    brand_id: number;
+    from: string;
+    to: string;
+    compare_from?: string;
+    compare_to?: string;
+    campaign_id?: string;
+  }) => {
+    const qs = new URLSearchParams();
+    qs.set('brand_id', String(params.brand_id));
+    qs.set('from', params.from);
+    qs.set('to', params.to);
+    if (params.compare_from) qs.set('compare_from', params.compare_from);
+    if (params.compare_to) qs.set('compare_to', params.compare_to);
+    if (params.campaign_id) qs.set('campaign_id', params.campaign_id);
+    return request<{ rows: VideoAssetRow[] }>(`/api/video-assets?${qs.toString()}`);
+  },
+
   mutate: (body: MutatePayload) =>
     request<{ ok: true; dry_run: boolean; response: unknown }>('/api/mutate', {
       method: 'POST',
@@ -230,6 +248,33 @@ export interface AudienceRow {
   criterion_id?: string;
   audience_type?: string;
   audience_label?: string;
+  metrics: DerivedMetrics;
+  comparison?: DerivedMetrics;
+}
+
+export interface VideoAssetUsage {
+  customer_id: string;
+  campaign_id?: string;
+  campaign_name?: string;
+  channel_type?: string;
+  group_id?: string;
+  group_name?: string;
+  group_kind: 'asset_group' | 'ad_group';
+  performance_label?: string;
+  cost: number;
+  impressions: number;
+  clicks: number;
+  conversions: number;
+}
+
+export interface VideoAssetRow {
+  youtube_video_id: string;
+  title?: string;
+  asset_ids: string[];
+  usage_count: number;
+  has_conversions_data: boolean;
+  best_label?: string;
+  usages: VideoAssetUsage[];
   metrics: DerivedMetrics;
   comparison?: DerivedMetrics;
 }

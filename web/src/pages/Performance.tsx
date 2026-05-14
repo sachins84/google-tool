@@ -8,6 +8,7 @@ import { MutationModal } from '../components/MutationModal';
 import { Assets } from './Assets';
 import { Audiences } from './Audiences';
 import { Products } from './Products';
+import { VideoAssets } from './VideoAssets';
 import { Filters, applyFilters, defaultFilterState, type FilterState } from '../components/Filters';
 import { NetworkSplit } from '../components/NetworkSplit';
 import { CampaignBreakdownPanel } from '../components/CampaignBreakdown';
@@ -23,7 +24,7 @@ interface Props {
   compareTo?: string;
 }
 
-type Tab = 'campaigns' | 'ad_groups' | 'asset_groups' | 'ads' | 'keywords' | 'search_terms' | 'assets' | 'audiences' | 'products';
+type Tab = 'campaigns' | 'ad_groups' | 'asset_groups' | 'ads' | 'keywords' | 'search_terms' | 'assets' | 'audiences' | 'products' | 'video_assets';
 
 interface Drill {
   campaignId?: string;
@@ -46,9 +47,10 @@ const TAB_LABELS: Record<Tab, string> = {
   assets: 'Assets',
   audiences: 'Audiences',
   products: 'Products',
+  video_assets: 'Video Assets',
 };
 
-type StandardTab = Exclude<Tab, 'assets' | 'audiences' | 'products'>;
+type StandardTab = Exclude<Tab, 'assets' | 'audiences' | 'products' | 'video_assets'>;
 
 const PATH_FOR_TAB: Record<StandardTab, 'campaigns' | 'ad-groups' | 'asset-groups' | 'ads' | 'keywords' | 'search-terms'> = {
   campaigns: 'campaigns',
@@ -93,7 +95,8 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
   const isAssetTab = tab === 'assets';
   const isAudienceTab = tab === 'audiences';
   const isProductTab = tab === 'products';
-  const isCustomTab = isAssetTab || isAudienceTab || isProductTab;
+  const isVideoTab = tab === 'video_assets';
+  const isCustomTab = isAssetTab || isAudienceTab || isProductTab || isVideoTab;
   const isPmaxDrill = drill.campaignChannelType === 'PERFORMANCE_MAX';
 
   useEffect(() => {
@@ -417,6 +420,15 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
         />
       ) : isProductTab ? (
         <Products
+          brandId={brandId}
+          from={from}
+          to={to}
+          compareFrom={compareFrom}
+          compareTo={compareTo}
+          campaignId={drill.campaignId}
+        />
+      ) : isVideoTab ? (
+        <VideoAssets
           brandId={brandId}
           from={from}
           to={to}
