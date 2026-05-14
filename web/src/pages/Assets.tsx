@@ -107,7 +107,7 @@ export function Assets({ brandId, from, to, compareFrom, compareTo, campaignId, 
     <div className="space-y-4">
       <div className="flex items-center gap-3 flex-wrap">
         <span className="text-sm text-gray-700">Performance:</span>
-        {(['', 'BEST', 'GOOD', 'LOW', 'PENDING', 'UNKNOWN'] as const).map((l) => (
+        {(['', 'BEST', 'GOOD', 'LOW', 'LEARNING', 'PENDING', 'UNKNOWN'] as const).map((l) => (
           <button
             key={l}
             onClick={() => setLabelFilter(l)}
@@ -351,9 +351,11 @@ function PerfPill({ label }: { label?: string }) {
     : label === 'GOOD' ? 'bg-blue-100 text-blue-800'
     : label === 'LOW' ? 'bg-red-100 text-red-800'
     : label === 'PENDING' ? 'bg-amber-100 text-amber-800'
+    : label === 'LEARNING' ? 'bg-violet-100 text-violet-800'
     : 'bg-gray-100 text-gray-700';
   const tip =
-    label === 'PENDING' ? 'Pending Google review — auto-transitions to LOW/GOOD/BEST after enough impressions (~1–2 weeks)'
+    label === 'LEARNING' ? 'Newly added — Google is gathering data before grading it relative to other assets in the group'
+    : label === 'PENDING' ? 'Being evaluated — auto-transitions to LOW/GOOD/BEST once enough impressions accumulate (~2–6 weeks for PMax)'
     : label === 'LOW' ? 'Underperforming relative to other assets in the group'
     : label === 'GOOD' ? 'Performing well'
     : label === 'BEST' ? 'Top performer in the group'

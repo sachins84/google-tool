@@ -158,7 +158,13 @@ function buildTrend(
   });
 }
 
-const LABEL_RANK: Record<string, number> = { BEST: 4, GOOD: 3, LOW: 2, PENDING: 1, UNKNOWN: 0 };
+// Rank order for collapsing the label across multiple usages of the same video.
+// LEARNING is Google's "freshly added, still gathering data" state — distinct
+// from PENDING ("being evaluated") but both are pre-rating, so they rank
+// below any actual grade (LOW/GOOD/BEST) and above UNKNOWN.
+const LABEL_RANK: Record<string, number> = {
+  BEST: 5, GOOD: 4, LOW: 3, LEARNING: 2, PENDING: 1, UNKNOWN: 0,
+};
 function bestLabel(a: string | undefined, b: string | undefined): string | undefined {
   if (!a) return b;
   if (!b) return a;

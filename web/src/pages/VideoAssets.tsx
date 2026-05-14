@@ -13,7 +13,7 @@ interface Props {
 
 type SortKey = 'cost' | 'impressions' | 'clicks' | 'ctr' | 'cpc' | 'conversions' | 'roas';
 type ChannelFilter = 'all' | 'PERFORMANCE_MAX' | 'DEMAND_GEN' | 'MULTI_CHANNEL' | 'VIDEO' | 'DISPLAY';
-type LabelFilter = 'all' | 'BEST' | 'GOOD' | 'LOW' | 'PENDING' | 'UNKNOWN';
+type LabelFilter = 'all' | 'BEST' | 'GOOD' | 'LOW' | 'LEARNING' | 'PENDING' | 'UNKNOWN';
 
 export function VideoAssets({ brandId, from, to, compareFrom, compareTo, campaignId }: Props) {
   const [rows, setRows] = useState<VideoAssetRow[]>([]);
@@ -113,7 +113,7 @@ export function VideoAssets({ brandId, from, to, compareFrom, compareTo, campaig
         </select>
         <div className="flex items-center gap-1 text-xs">
           <span className="text-gray-700">Label:</span>
-          {(['all', 'BEST', 'GOOD', 'LOW', 'PENDING', 'UNKNOWN'] as const).map((l) => (
+          {(['all', 'BEST', 'GOOD', 'LOW', 'LEARNING', 'PENDING', 'UNKNOWN'] as const).map((l) => (
             <button
               key={l}
               onClick={() => setLabelFilter(l)}
@@ -295,8 +295,16 @@ function PerfPill({ label }: { label?: string }) {
     : label === 'GOOD' ? 'bg-blue-100 text-blue-800'
     : label === 'LOW' ? 'bg-red-100 text-red-800'
     : label === 'PENDING' ? 'bg-amber-100 text-amber-800'
+    : label === 'LEARNING' ? 'bg-violet-100 text-violet-800'
     : 'bg-gray-100 text-gray-700';
-  return <span className={`inline-block px-2 py-0.5 rounded text-[11px] font-medium ${tone}`}>{label}</span>;
+  const tip =
+    label === 'LEARNING' ? 'Newly added — Google is gathering data before grading it relative to other assets in the group'
+    : label === 'PENDING' ? 'Being evaluated — auto-transitions to LOW/GOOD/BEST once enough impressions accumulate (~2–6 weeks for PMax)'
+    : label === 'LOW' ? 'Underperforming relative to other assets in the same group'
+    : label === 'GOOD' ? 'Performing as expected'
+    : label === 'BEST' ? 'Top performer in the group'
+    : undefined;
+  return <span title={tip} className={`inline-block px-2 py-0.5 rounded text-[11px] font-medium ${tone}`}>{label}</span>;
 }
 
 function SortableHead({
