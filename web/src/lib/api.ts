@@ -388,6 +388,16 @@ export type MutatePayload =
       dry_run: boolean;
     }
   | {
+      action: 'update_ad_group_bids';
+      brand_id: number;
+      customer_id: string;
+      ad_group_id: string;
+      cpc_bid_inr?: number;
+      target_cpa_inr?: number;
+      target_roas?: number;
+      dry_run: boolean;
+    }
+  | {
       action: 'create_search_campaign';
       brand_id: number;
       customer_id: string;
@@ -583,6 +593,8 @@ export interface PerfRow {
   channel_type?: string;
   daily_budget_inr?: number;
   cpc_bid_inr?: number;
+  ad_group_target_cpa_inr?: number;
+  ad_group_target_roas?: number;
   headlines?: string[];
   descriptions?: string[];
   final_urls?: string[];

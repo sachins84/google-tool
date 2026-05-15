@@ -50,6 +50,18 @@ const positiveKwSchema = baseSchema.extend({
   match_type: z.enum(['EXACT', 'PHRASE', 'BROAD']).default('BROAD'),
 });
 
+const adGroupBidsSchema = baseSchema.extend({
+  action: z.literal('update_ad_group_bids'),
+  ad_group_id: z.string(),
+  // any combo of these — only changed fields are sent. Which fields Google
+  // accepts depends on the parent campaign's bidding strategy (manual CPC,
+  // target CPA, target ROAS, etc.); Google rejects incompatible combos.
+  // Handler asserts that at least one field was passed.
+  cpc_bid_inr: z.number().min(0).optional(),
+  target_cpa_inr: z.number().min(0).optional(),
+  target_roas: z.number().min(0.5).max(20).optional(),
+});
+
 const updateSettingsSchema = baseSchema.extend({
   action: z.literal('update_campaign_settings'),
   campaign_id: z.string(),
@@ -117,6 +129,7 @@ const requestSchema = z.discriminatedUnion('action', [
   assetStatusSchema.extend({ action: z.literal('remove_asset') }),
   addTextAssetSchema,
   updateSettingsSchema,
+  adGroupBidsSchema,
   createCampaignSchema,
 ]);
 
@@ -329,6 +342,34 @@ export async function mutateRoutes(app: FastifyInstance): Promise<void> {
           ...(body.end_date ? { end_date: body.end_date } : {}),
           ...(body.target_roas != null ? { target_roas: body.target_roas } : {}),
           ...(body.target_cpa_inr != null ? { target_cpa_inr: body.target_cpa_inr } : {}),
+        };
+      } else if (body.action === 'update_ad_group_bids') {
+        if (body.cpc_bid_inr == null && body.target_cpa_inr == null && body.target_roas == null) {
+          return reply.code(400).send({ error: 'Pass at least one of cpc_bid_inr, target_cpa_inr, target_roas' });
+        }
+        target = `customers/${body.customer_id}/adGroups/${body.ad_group_id}`;
+        const update: Record<string, unknown> = { resourceName: target };
+        const updateMaskParts: string[] = [];
+        if (body.cpc_bid_inr != null) {
+          update.cpcBidMicros = String(Math.round(body.cpc_bid_inr * MICROS));
+          updateMaskParts.push('cpc_bid_micros');
+        }
+        if (body.target_cpa_inr != null) {
+          update.targetCpaMicros = String(Math.round(body.target_cpa_inr * MICROS));
+          updateMaskParts.push('target_cpa_micros');
+        }
+        if (body.target_roas != null) {
+          update.targetRoas = body.target_roas;
+          updateMaskParts.push('target_roas');
+        }
+        operations = [{
+          adGroupOperation: { update, updateMask: updateMaskParts.join(',') },
+        }];
+        actionLabel = 'update_ad_group_bids';
+        after = {
+          ...(body.cpc_bid_inr != null ? { cpc_bid_inr: body.cpc_bid_inr } : {}),
+          ...(body.target_cpa_inr != null ? { target_cpa_inr: body.target_cpa_inr } : {}),
+          ...(body.target_roas != null ? { target_roas: body.target_roas } : {}),
         };
       } else if (body.action === 'create_search_campaign') {
         // Two-op batch: create budget then campaign that references it via temp resource name

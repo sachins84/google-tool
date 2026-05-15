@@ -57,6 +57,8 @@ interface Row {
   bidding_strategy_type?: string;
   daily_budget_inr?: number;
   cpc_bid_inr?: number;
+  ad_group_target_cpa_inr?: number;
+  ad_group_target_roas?: number;
   headlines?: string[];
   descriptions?: string[];
   final_urls?: string[];
@@ -100,6 +102,8 @@ interface GoogleAdsRow {
     status?: string;
     type?: string;
     cpcBidMicros?: string;
+    targetCpaMicros?: string;
+    targetRoas?: number;
   };
   adGroupAd?: {
     status?: string;
@@ -775,6 +779,8 @@ function shapeRow(level: Level, customerId: string, r: GoogleAdsRow): Row {
   if (level === 'ad_group') {
     base.status = r.adGroup?.status;
     if (r.adGroup?.cpcBidMicros) base.cpc_bid_inr = Number(r.adGroup.cpcBidMicros) / MICROS;
+    if (r.adGroup?.targetCpaMicros) base.ad_group_target_cpa_inr = Number(r.adGroup.targetCpaMicros) / MICROS;
+    if (r.adGroup?.targetRoas != null) base.ad_group_target_roas = Number(r.adGroup.targetRoas);
   }
   if (level === 'asset_group') {
     base.asset_group_id = r.assetGroup?.id;

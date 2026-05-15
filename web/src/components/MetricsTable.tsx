@@ -10,7 +10,8 @@ export type RowAction =
   | { kind: 'update_budget'; row: PerfRow }
   | { kind: 'add_negative'; row: PerfRow } // for search terms / keywords
   | { kind: 'add_keyword'; row: PerfRow } // synthesized from drill state
-  | { kind: 'edit_campaign'; row: PerfRow }; // edit settings (name, dates, bid targets)
+  | { kind: 'edit_campaign'; row: PerfRow } // edit settings (name, dates, bid targets)
+  | { kind: 'edit_ad_group_bids'; row: PerfRow }; // adjust cpc / target CPA / target ROAS at ad-group level
 
 interface Props {
   level: TableLevel;
@@ -244,6 +245,11 @@ export function MetricsTable({ level, rows, hasCompare, showCalcMetrics = false,
                           {level === 'campaign' && (
                             <ActionButton onClick={() => { setOpenActionsFor(null); onAction({ kind: 'edit_campaign', row: r }); }}>
                               Edit settings…
+                            </ActionButton>
+                          )}
+                          {level === 'ad_group' && (
+                            <ActionButton onClick={() => { setOpenActionsFor(null); onAction({ kind: 'edit_ad_group_bids', row: r }); }}>
+                              Edit bids…
                             </ActionButton>
                           )}
                           {level === 'search_term' && (

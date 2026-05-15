@@ -126,6 +126,8 @@ export function buildAdGroupsQuery(opts: BuildOptions): string {
     'ad_group.status',
     'ad_group.type',
     'ad_group.cpc_bid_micros',
+    'ad_group.target_cpa_micros',
+    'ad_group.target_roas',
     ...METRIC_FIELDS,
     ...SEARCH_IS_FIELDS_AD_GROUP,
   ];
