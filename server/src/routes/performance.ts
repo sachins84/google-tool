@@ -446,6 +446,14 @@ async function mergeRedshiftMetrics(rows: Row[], brandId: number, from: string, 
   const byName = new Map<string, { ncs: number; amount: number }>();
   const byNormName = new Map<string, { ncs: number; amount: number }>();
 
+  // Set of campaign IDs active in this window (had spend / impressions) — used
+  // to constrain the 1/N split so we don't credit NCs to paused-out campaigns
+  // that happen to share an asset_group name.
+  const activeCampaignIds = new Set<string>();
+  for (const row of rows) {
+    if (row.campaign_id && (row.metrics?.cost ?? 0) > 0) activeCampaignIds.add(row.campaign_id);
+  }
+
   function normalize(s: string): string {
     return s.toLowerCase().replace(/[^a-z0-9]+/g, '');
   }
@@ -472,9 +480,14 @@ async function mergeRedshiftMetrics(rows: Row[], brandId: number, from: string, 
       }
       const agTargets = agNameToCampaignId.get(lcKey) ?? agNameToCampaignId.get(normKey);
       if (agTargets && agTargets.length) {
-        // Same asset_group name often lives in N PMax campaigns — split equally.
-        const share = { ncs: r.ncs / agTargets.length, amount: r.amount / agTargets.length };
-        for (const cid of agTargets) add(byId, cid, share);
+        // Same asset_group name often lives in N PMax campaigns — distribute
+        // equally across only the campaigns that ran in this window (skip
+        // paused / zero-spend ones). Falls back to all candidates if none of
+        // them spent today (data-quality fallback, rarely hit).
+        const active = agTargets.filter((cid) => activeCampaignIds.has(cid));
+        const targets = active.length ? active : agTargets;
+        const share = { ncs: r.ncs / targets.length, amount: r.amount / targets.length };
+        for (const cid of targets) add(byId, cid, share);
         continue;
       }
       add(byName, lcKey, entry);
@@ -614,16 +627,16 @@ function buildOtherRow(utmSource: string, ncs: number, amount: number, samples: 
  */
 async function buildAssetGroupNameToCampaignIdMap(
   customerIds: string[],
-  from: string,
-  to: string
+  _from: string,
+  _to: string
 ): Promise<Map<string, string[]>> {
   if (!customerIds.length) return new Map();
+  // Pull ALL asset_group → campaign mappings (no date / cost filter). An asset
+  // group that spent zero in this window can still own NCs tagged with its name
+  // — utm_campaigns can come from historic clicks or paused groups.
   const query = `
-    SELECT campaign.id, asset_group.name, metrics.cost_micros
+    SELECT campaign.id, asset_group.name
     FROM asset_group
-    WHERE segments.date BETWEEN '${from}' AND '${to}'
-      AND asset_group.status != 'REMOVED'
-      AND metrics.cost_micros > 0
   `.trim();
   const perAccount = await Promise.all(
     customerIds.map(async (cid) => {
