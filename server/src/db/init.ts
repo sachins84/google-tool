@@ -207,6 +207,9 @@ export function initDatabase(): Database.Database {
 
   // Idempotent column adds — safe for already-initialised DBs
   try { db.exec('ALTER TABLE brands ADD COLUMN revenue_rto_factor REAL'); } catch { /* already exists */ }
+  // utm_campaign_aliases: JSON record { "IBK": "Immunity Boosting Kit", ... } —
+  // maps a raw utm_campaign value to a target asset_group / campaign name.
+  try { db.exec('ALTER TABLE brand_redshift_config ADD COLUMN utm_campaign_aliases TEXT'); } catch { /* already exists */ }
 
   bootstrapAdmin(db);
   bootstrapDefaultBrand(db);

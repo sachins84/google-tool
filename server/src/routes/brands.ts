@@ -108,6 +108,35 @@ export async function brandRoutes(app: FastifyInstance): Promise<void> {
     getDb().prepare('DELETE FROM brands WHERE id = ?').run(id);
     return { ok: true };
   });
+
+  // Brand-level utm_campaign alias map (for Redshift attribution).
+  // GET returns { aliases: Record<string,string> }; PUT replaces the full map.
+  app.get('/:id/utm-aliases', async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    if (!Number.isFinite(id)) return reply.code(400).send({ error: 'Bad id' });
+    const row = getDb()
+      .prepare('SELECT utm_campaign_aliases FROM brand_redshift_config WHERE brand_id = ?')
+      .get(id) as { utm_campaign_aliases: string | null } | undefined;
+    let aliases: Record<string, string> = {};
+    try { aliases = JSON.parse(row?.utm_campaign_aliases ?? '{}') ?? {}; } catch { /* ignore */ }
+    return { aliases };
+  });
+
+  app.put('/:id/utm-aliases', async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    if (!Number.isFinite(id)) return reply.code(400).send({ error: 'Bad id' });
+    const parsed = z.object({ aliases: z.record(z.string(), z.string()) }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    const json = JSON.stringify(parsed.data.aliases);
+    getDb()
+      .prepare(
+        `INSERT INTO brand_redshift_config (brand_id, utm_campaign_aliases, enabled)
+         VALUES (?, ?, COALESCE((SELECT enabled FROM brand_redshift_config WHERE brand_id = ?), 0))
+         ON CONFLICT(brand_id) DO UPDATE SET utm_campaign_aliases = excluded.utm_campaign_aliases`
+      )
+      .run(id, json, id);
+    return { ok: true, aliases: parsed.data.aliases };
+  });
 }
 
 /** Upsert brand_redshift_config for a brand whose name matches a known preset. */

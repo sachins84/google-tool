@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, type BrandPayload } from '../lib/api';
+import { UtmAliasModal } from '../components/UtmAliasModal';
 
 interface Account {
   customer_id: string;
@@ -29,6 +30,7 @@ export function Settings({ onBrandsChanged }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<Brand | null>(null);
   const [creating, setCreating] = useState(false);
+  const [aliasFor, setAliasFor] = useState<Brand | null>(null);
 
   async function refresh() {
     setLoading(true);
@@ -129,6 +131,7 @@ export function Settings({ onBrandsChanged }: Props) {
                     </td>
                     <td className="px-3 py-2 text-right space-x-3">
                       <button onClick={() => setEditing(b)} className="text-blue-700 hover:underline">Edit</button>
+                      <button onClick={() => setAliasFor(b)} className="text-blue-700 hover:underline">UTM aliases</button>
                       <button onClick={() => handleDelete(b.id)} className="text-red-700 hover:underline">Delete</button>
                     </td>
                   </tr>
@@ -153,6 +156,14 @@ export function Settings({ onBrandsChanged }: Props) {
           initial={editing}
           onCancel={() => { setEditing(null); setCreating(false); }}
           onSave={(p) => handleSave(p, editing?.id ?? null)}
+        />
+      )}
+
+      {aliasFor && (
+        <UtmAliasModal
+          brandId={aliasFor.id}
+          brandName={aliasFor.name}
+          onClose={() => setAliasFor(null)}
         />
       )}
     </div>

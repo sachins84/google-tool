@@ -61,6 +61,14 @@ export const api = {
   brandDelete: (id: number) =>
     request<{ ok: true }>(`/api/brands/${id}`, { method: 'DELETE' }),
 
+  brandUtmAliases: (id: number) =>
+    request<{ aliases: Record<string, string> }>(`/api/brands/${id}/utm-aliases`),
+  brandUtmAliasesUpdate: (id: number, aliases: Record<string, string>) =>
+    request<{ ok: true; aliases: Record<string, string> }>(`/api/brands/${id}/utm-aliases`, {
+      method: 'PUT',
+      body: JSON.stringify({ aliases }),
+    }),
+
   perf: (
     level: 'campaigns' | 'ad-groups' | 'asset-groups' | 'ads' | 'keywords' | 'search-terms',
     params: PerfParams

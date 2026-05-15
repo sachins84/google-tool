@@ -227,6 +227,7 @@ interface BrandRedshiftRow {
   brand_id: number;
   funnel_table: string | null;
   utm_source_list: string | null;
+  utm_campaign_aliases: string | null;
   enabled: number;
 }
 
@@ -384,7 +385,7 @@ export async function tryFetchBrandTotals(
   compareFrom?: string, compareTo?: string
 ): Promise<{ primary?: BrandRsTotal; compare?: BrandRsTotal } | undefined> {
   const cfg = getDb()
-    .prepare('SELECT brand_id, funnel_table, utm_source_list, enabled FROM brand_redshift_config WHERE brand_id = ?')
+    .prepare('SELECT brand_id, funnel_table, utm_source_list, utm_campaign_aliases, enabled FROM brand_redshift_config WHERE brand_id = ?')
     .get(brandId) as BrandRedshiftRow | undefined;
   if (!cfg || !cfg.enabled || !cfg.funnel_table) return undefined;
   let utmSourceList: string[] = [];
@@ -412,12 +413,26 @@ export async function tryFetchBrandTotals(
 
 async function mergeRedshiftMetrics(rows: Row[], brandId: number, from: string, to: string): Promise<Row[]> {
   const cfg = getDb()
-    .prepare('SELECT brand_id, funnel_table, utm_source_list, enabled FROM brand_redshift_config WHERE brand_id = ?')
+    .prepare('SELECT brand_id, funnel_table, utm_source_list, utm_campaign_aliases, enabled FROM brand_redshift_config WHERE brand_id = ?')
     .get(brandId) as BrandRedshiftRow | undefined;
   if (!cfg || !cfg.enabled || !cfg.funnel_table) return rows;
   let utmSourceList: string[] = [];
   try { utmSourceList = JSON.parse(cfg.utm_source_list ?? '[]'); } catch { /* ignore */ }
   if (utmSourceList.length === 0) return rows;
+
+  // Brand-level alias map: { "IBK": "Immunity Boosting Kit", "PDP": "All Products", … }
+  // Keys are matched case-insensitively against the raw utm_campaign value;
+  // value is the asset_group_name (or campaign_name) that the funnel-side tag
+  // should resolve to.
+  let aliases: Record<string, string> = {};
+  try {
+    const raw = JSON.parse(cfg.utm_campaign_aliases ?? '{}');
+    if (raw && typeof raw === 'object') {
+      aliases = Object.fromEntries(
+        Object.entries(raw).map(([k, v]) => [String(k).toLowerCase(), String(v)]),
+      );
+    }
+  } catch { /* ignore */ }
 
   // Fetch Redshift NCs + Google indexes in parallel.
   // ad_id map:           Search campaigns use {creative} → utm_campaign holds AD ID
@@ -471,8 +486,11 @@ async function mergeRedshiftMetrics(rows: Row[], brandId: number, from: string, 
     } else {
       // non-numeric — try SKU first (Shopping {product_id}), then asset_group_name
       // (PMax tracking template), then fall back to campaign name fuzzy matching.
-      const lcKey = r.utm_campaign.toLowerCase();
-      const normKey = normalize(r.utm_campaign);
+      // Resolve brand-level alias first (e.g. "IBK" → "Immunity Boosting Kit")
+      // so the rest of the lookup pipeline can find a match.
+      const aliasedCampaign = aliases[r.utm_campaign.toLowerCase()] ?? r.utm_campaign;
+      const lcKey = aliasedCampaign.toLowerCase();
+      const normKey = normalize(aliasedCampaign);
       const skuTarget = skuToCampaignId.get(lcKey);
       if (skuTarget) {
         add(byId, skuTarget, entry);
@@ -524,8 +542,9 @@ async function mergeRedshiftMetrics(rows: Row[], brandId: number, from: string, 
       const cid = adIdToCampaignId.get(r.utm_campaign) ?? r.utm_campaign;
       if (matchedCampaignIds.has(cid)) attributed = true;
     } else {
-      const lcKey = r.utm_campaign.toLowerCase();
-      const normKey = normalize(r.utm_campaign);
+      const aliasedCampaign = aliases[r.utm_campaign.toLowerCase()] ?? r.utm_campaign;
+      const lcKey = aliasedCampaign.toLowerCase();
+      const normKey = normalize(aliasedCampaign);
       const skuTarget = skuToCampaignId.get(lcKey);
       const agTargets = agNameToCampaignId.get(lcKey) ?? agNameToCampaignId.get(normKey);
       if ((skuTarget && matchedCampaignIds.has(skuTarget))
