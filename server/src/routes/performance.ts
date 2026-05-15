@@ -470,9 +470,11 @@ async function mergeRedshiftMetrics(rows: Row[], brandId: number, from: string, 
         add(byId, skuTarget, entry);
         continue;
       }
-      const agTarget = agNameToCampaignId.get(lcKey) ?? agNameToCampaignId.get(normKey);
-      if (agTarget) {
-        add(byId, agTarget, entry);
+      const agTargets = agNameToCampaignId.get(lcKey) ?? agNameToCampaignId.get(normKey);
+      if (agTargets && agTargets.length) {
+        // Same asset_group name often lives in N PMax campaigns — split equally.
+        const share = { ncs: r.ncs / agTargets.length, amount: r.amount / agTargets.length };
+        for (const cid of agTargets) add(byId, cid, share);
         continue;
       }
       add(byName, lcKey, entry);
@@ -512,9 +514,9 @@ async function mergeRedshiftMetrics(rows: Row[], brandId: number, from: string, 
       const lcKey = r.utm_campaign.toLowerCase();
       const normKey = normalize(r.utm_campaign);
       const skuTarget = skuToCampaignId.get(lcKey);
-      const agTarget = agNameToCampaignId.get(lcKey) ?? agNameToCampaignId.get(normKey);
+      const agTargets = agNameToCampaignId.get(lcKey) ?? agNameToCampaignId.get(normKey);
       if ((skuTarget && matchedCampaignIds.has(skuTarget))
-          || (agTarget && matchedCampaignIds.has(agTarget))
+          || (agTargets && agTargets.some((cid) => matchedCampaignIds.has(cid)))
           || matchedNames.has(lcKey)
           || matchedNormNames.has(normKey)) {
         attributed = true;
@@ -597,17 +599,24 @@ function buildOtherRow(utmSource: string, ncs: number, amount: number, samples: 
 }
 
 /**
- * Build an {asset_group_name (lowercase) → campaign_id} index for PMax asset groups
- * in the given window. PMax tracking templates sometimes use the asset group name
- * verbatim as utm_campaign (e.g. 'Nutrimix-2', 'IBK', 'MV') instead of the campaign ID.
+ * Build an {asset_group_name → [campaign_id, …]} index for PMax asset groups
+ * in the given window. PMax tracking templates sometimes use the asset group
+ * name verbatim as utm_campaign (e.g. 'Nutrimix', 'IBK', 'MV') instead of the
+ * campaign ID.
  *
- * If the same asset_group_name appears in multiple campaigns, picks the highest-spend.
+ * Same asset_group_name often lives in multiple campaigns (e.g. "Nutrimix"
+ * exists as an asset group in 3 different PMax campaigns). We return ALL the
+ * candidate campaign IDs so the caller can distribute NCs equally across
+ * them (1/N each) — see services/redshift attribution rules.
+ *
+ * Indexed by both lowercase and alphanumeric-normalized name so tracking
+ * templates that use 'brain_gummies' resolve to asset group 'Brain Gummies'.
  */
 async function buildAssetGroupNameToCampaignIdMap(
   customerIds: string[],
   from: string,
   to: string
-): Promise<Map<string, string>> {
+): Promise<Map<string, string[]>> {
   if (!customerIds.length) return new Map();
   const query = `
     SELECT campaign.id, asset_group.name, metrics.cost_micros
@@ -623,7 +632,6 @@ async function buildAssetGroupNameToCampaignIdMap(
         return await search<{
           campaign?: { id?: string };
           assetGroup?: { name?: string };
-          metrics?: { costMicros?: string };
         }>({ customerId: cid, loginCustomerId, query });
       } catch (err) {
         console.error(`[ag-name-map] customer ${cid} failed:`, err instanceof Error ? err.message : String(err));
@@ -631,32 +639,23 @@ async function buildAssetGroupNameToCampaignIdMap(
       }
     })
   );
-  const nameToCampaignCosts = new Map<string, Map<string, number>>();
+  const byName = new Map<string, Set<string>>();
   for (const rows of perAccount) {
     for (const r of rows) {
       const name = r.assetGroup?.name?.toLowerCase();
       const cid = r.campaign?.id;
-      const cost = Number(r.metrics?.costMicros ?? 0);
       if (!name || !cid) continue;
-      let inner = nameToCampaignCosts.get(name);
-      if (!inner) { inner = new Map(); nameToCampaignCosts.set(name, inner); }
-      inner.set(cid, (inner.get(cid) ?? 0) + cost);
+      let set = byName.get(name);
+      if (!set) { set = new Set(); byName.set(name, set); }
+      set.add(cid);
     }
   }
-  // Index by both lowercase and alphanumeric-normalized name to catch tracking
-  // templates that use 'brain_gummies' for asset group 'Brain Gummies'.
-  const result = new Map<string, string>();
-  for (const [name, costs] of nameToCampaignCosts) {
-    let bestCid = '';
-    let bestCost = -1;
-    for (const [cid, cost] of costs) {
-      if (cost > bestCost) { bestCost = cost; bestCid = cid; }
-    }
-    if (bestCid) {
-      result.set(name, bestCid);
-      const normalized = name.toLowerCase().replace(/[^a-z0-9]+/g, '');
-      if (!result.has(normalized)) result.set(normalized, bestCid);
-    }
+  const result = new Map<string, string[]>();
+  for (const [name, set] of byName) {
+    const ids = Array.from(set);
+    result.set(name, ids);
+    const normalized = name.replace(/[^a-z0-9]+/g, '');
+    if (!result.has(normalized)) result.set(normalized, ids);
   }
   return result;
 }
