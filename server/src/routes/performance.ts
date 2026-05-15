@@ -650,12 +650,16 @@ async function buildAssetGroupNameToCampaignIdMap(
   _to: string
 ): Promise<Map<string, string[]>> {
   if (!customerIds.length) return new Map();
-  // Pull ALL asset_group → campaign mappings (no date / cost filter). An asset
-  // group that spent zero in this window can still own NCs tagged with its name
-  // — utm_campaigns can come from historic clicks or paused groups.
+  // Pull ENABLED asset_group → campaign mappings only. PAUSED / REMOVED asset
+  // groups can't be serving the clicks that drove today's NCs, so they
+  // shouldn't be candidates for the equal-split denominator — even if their
+  // parent campaign is currently active. No date / cost filter though: an
+  // asset_group that's currently ENABLED but happened to spend zero today
+  // can still own historic clicks that convert today.
   const query = `
     SELECT campaign.id, asset_group.name
     FROM asset_group
+    WHERE asset_group.status = 'ENABLED'
   `.trim();
   const perAccount = await Promise.all(
     customerIds.map(async (cid) => {
