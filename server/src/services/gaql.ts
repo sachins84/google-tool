@@ -154,6 +154,10 @@ export function buildAdsQuery(opts: BuildOptions): string {
     'ad_group_ad.status',
     'ad_group_ad.ad.responsive_search_ad.headlines',
     'ad_group_ad.ad.responsive_search_ad.descriptions',
+    'ad_group_ad.ad.app_ad.headlines',
+    'ad_group_ad.ad.app_ad.descriptions',
+    'ad_group_ad.ad.responsive_display_ad.headlines',
+    'ad_group_ad.ad.responsive_display_ad.descriptions',
     'ad_group_ad.ad.final_urls',
     ...METRIC_FIELDS,
   ];

@@ -116,6 +116,14 @@ interface GoogleAdsRow {
         headlines?: Array<{ text?: string }>;
         descriptions?: Array<{ text?: string }>;
       };
+      appAd?: {
+        headlines?: Array<{ text?: string }>;
+        descriptions?: Array<{ text?: string }>;
+      };
+      responsiveDisplayAd?: {
+        headlines?: Array<{ text?: string }>;
+        descriptions?: Array<{ text?: string }>;
+      };
     };
   };
   adGroupCriterion?: {
@@ -832,12 +840,13 @@ function shapeRow(level: Level, customerId: string, r: GoogleAdsRow): Row {
     base.ad_name = r.adGroupAd?.ad?.name;
     base.ad_type = r.adGroupAd?.ad?.type;
     base.status = r.adGroupAd?.status;
-    base.headlines = (r.adGroupAd?.ad?.responsiveSearchAd?.headlines ?? [])
-      .map((h) => h.text ?? '')
-      .filter(Boolean);
-    base.descriptions = (r.adGroupAd?.ad?.responsiveSearchAd?.descriptions ?? [])
-      .map((d) => d.text ?? '')
-      .filter(Boolean);
+    // RSA / App / Responsive Display ads each store headlines+descriptions
+    // under a different sub-resource — collapse whichever is populated.
+    const ad = r.adGroupAd?.ad;
+    const hl = ad?.responsiveSearchAd?.headlines ?? ad?.appAd?.headlines ?? ad?.responsiveDisplayAd?.headlines ?? [];
+    const ds = ad?.responsiveSearchAd?.descriptions ?? ad?.appAd?.descriptions ?? ad?.responsiveDisplayAd?.descriptions ?? [];
+    base.headlines = hl.map((h) => h.text ?? '').filter(Boolean);
+    base.descriptions = ds.map((d) => d.text ?? '').filter(Boolean);
     base.final_urls = r.adGroupAd?.ad?.finalUrls ?? [];
   }
   if (level === 'keyword') {
