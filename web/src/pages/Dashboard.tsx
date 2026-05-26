@@ -4,6 +4,7 @@ import { Performance } from './Performance';
 import { Settings } from './Settings';
 import { Audit } from './Audit';
 import { Insights } from './Insights';
+import { YoutubeUploader } from './YoutubeUploader';
 import { api } from '../lib/api';
 
 interface Props {
@@ -58,6 +59,8 @@ export function Dashboard({ username, onLogout }: Props) {
           <Settings onBrandsChanged={refreshBrands} />
         ) : view === 'audit' ? (
           <Audit />
+        ) : view === 'youtube' ? (
+          <YoutubeUploader />
         ) : view === 'insights' ? (
           state.brandId && state.from && state.to ? (
             <Insights

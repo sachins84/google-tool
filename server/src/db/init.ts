@@ -203,6 +203,56 @@ export function initDatabase(): Database.Database {
       value_json TEXT NOT NULL,
       expires_at INTEGER NOT NULL
     );
+
+    -- YouTube uploader jobs
+    CREATE TABLE IF NOT EXISTS youtube_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER,
+      channel_key TEXT NOT NULL,
+      channel_label TEXT,
+      sheet_id TEXT NOT NULL,
+      sheet_tab TEXT,
+      privacy_status TEXT DEFAULT 'unlisted',
+      status TEXT DEFAULT 'pending',  -- pending|running|completed|failed|cancelled
+      total_rows INTEGER DEFAULT 0,
+      done_rows INTEGER DEFAULT 0,
+      error_rows INTEGER DEFAULT 0,
+      error TEXT,
+      created_at INTEGER DEFAULT (strftime('%s','now')),
+      started_at INTEGER,
+      finished_at INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS youtube_job_rows (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_id INTEGER NOT NULL,
+      sheet_row INTEGER NOT NULL,
+      drive_link TEXT,
+      drive_file_id TEXT,
+      title TEXT,
+      description TEXT,
+      tags TEXT,
+      bytes_total INTEGER,
+      bytes_uploaded INTEGER DEFAULT 0,
+      youtube_video_id TEXT,
+      youtube_url TEXT,
+      status TEXT DEFAULT 'pending', -- pending|uploading|done|error|skipped
+      error TEXT,
+      started_at INTEGER,
+      finished_at INTEGER,
+      FOREIGN KEY (job_id) REFERENCES youtube_jobs(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_yt_rows_job ON youtube_job_rows(job_id);
+
+    -- Cached channel metadata (channelId, snippet.title) keyed by env channel key
+    CREATE TABLE IF NOT EXISTS youtube_channels (
+      key TEXT PRIMARY KEY,
+      channel_id TEXT,
+      title TEXT,
+      thumbnail TEXT,
+      fetched_at INTEGER
+    );
   `);
 
   // Idempotent column adds — safe for already-initialised DBs

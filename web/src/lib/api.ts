@@ -246,7 +246,68 @@ export const api = {
     qs.set('limit', String(params.limit ?? 100));
     return request<{ entries: AuditEntry[] }>(`/api/audit?${qs.toString()}`);
   },
+
+  ytChannels: () =>
+    request<{ channels: YoutubeChannel[] }>('/api/youtube/channels'),
+
+  ytUploadStart: (body: {
+    channel_key: string;
+    sheet: string;
+    sheet_tab?: string;
+    privacy_status?: 'unlisted' | 'private' | 'public';
+  }) =>
+    request<{ job: YoutubeJob }>('/api/youtube/upload', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  ytJobs: () => request<{ jobs: YoutubeJob[] }>('/api/youtube/jobs'),
+
+  ytJob: (id: number) =>
+    request<{ job: YoutubeJob; rows: YoutubeJobRow[] }>(`/api/youtube/jobs/${id}`),
 };
+
+export interface YoutubeChannel {
+  key: string;
+  label: string;
+  channelId?: string;
+  title?: string;
+  thumbnail?: string;
+}
+
+export interface YoutubeJob {
+  id: number;
+  channel_key: string;
+  channel_label: string | null;
+  sheet_id: string;
+  sheet_tab: string | null;
+  privacy_status: string;
+  status: string;
+  total_rows: number;
+  done_rows: number;
+  error_rows: number;
+  error: string | null;
+  created_at: number;
+  started_at: number | null;
+  finished_at: number | null;
+}
+
+export interface YoutubeJobRow {
+  id: number;
+  job_id: number;
+  sheet_row: number;
+  drive_link: string;
+  drive_file_id: string | null;
+  title: string | null;
+  bytes_total: number | null;
+  bytes_uploaded: number;
+  youtube_video_id: string | null;
+  youtube_url: string | null;
+  status: string;
+  error: string | null;
+  started_at: number | null;
+  finished_at: number | null;
+}
 
 export interface AudienceRow {
   customer_id: string;
