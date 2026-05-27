@@ -18,11 +18,13 @@ const REASON_LABEL: Record<string, string> = {
   SCALE_UP: 'Scale up', SCALE_DOWN: 'Scale down', PAUSE_LOW_ROAS: 'Pause (low ROAS)',
   TIGHTEN_TROAS: 'Tighten tROAS', EXCLUDE_KW: 'Exclude keyword', PAUSE_ASSET_GROUP: 'Pause asset group',
   PAUSE_POOR_AD: 'Pause poor ad', MONITOR_LEARNING: 'Hold (learning)', MONITOR_LOW_CONF: 'Hold (low data)',
+  REVIEW_CREATIVE: 'Review (creative)', REVIEW_LANDING: 'Review (landing)',
 };
 const BUCKET_LABEL: Record<string, string> = {
-  scale_up: 'Scale up', scale_down: 'Scale down', pause: 'Pause', exclude: 'Exclude', tighten: 'Tighten', hold: 'Hold',
+  scale_up: 'Scale up', scale_down: 'Scale down', pause: 'Pause', exclude: 'Exclude', tighten: 'Tighten', review: 'Review', hold: 'Hold',
 };
-const BUCKET_ORDER = ['scale_up', 'scale_down', 'pause', 'exclude', 'tighten', 'hold'];
+const BUCKET_ORDER = ['scale_up', 'scale_down', 'pause', 'exclude', 'tighten', 'review', 'hold'];
+const pf = (n: number | null | undefined): string => (n == null ? '—' : `${(n * 100).toFixed(1)}%`);
 const LEVELS = ['campaign', 'ad_group', 'asset_group', 'ad', 'keyword'];
 const WINDOW_PRESETS = [7, 14, 30];
 
@@ -192,6 +194,8 @@ export function Actions({ brandId, brandName }: Props) {
                 <th className="text-left font-medium py-2 px-2">Action</th>
                 <th className="text-right font-medium py-2 px-2">Change</th>
                 <th className="text-right font-medium py-2 px-2">ROAS</th>
+                <th className="text-right font-medium py-2 px-2">CTR</th>
+                <th className="text-right font-medium py-2 px-2">Srch IS</th>
                 <th className="text-right font-medium py-2 px-2">Conf</th>
                 <th className="text-right font-medium py-2 px-2">Δ value/day</th>
                 <th className="text-left font-medium py-2 px-2">Your action</th>
@@ -221,6 +225,8 @@ export function Actions({ brandId, brandName }: Props) {
                       <td className="px-2 py-2 whitespace-nowrap">{ACTION_LABEL[rec.mutate_action] ?? rec.mutate_action}</td>
                       <td className="px-2 py-2 text-right whitespace-nowrap tabular-nums">{changeText(rec)}</td>
                       <td className="px-2 py-2 text-right tabular-nums">{x(roas)}</td>
+                      <td className="px-2 py-2 text-right tabular-nums text-gray-600">{rec.current?.ctr ? pf(rec.current.ctr) : '—'}</td>
+                      <td className="px-2 py-2 text-right tabular-nums text-gray-600">{rec.current?.search_is ? pf(rec.current.search_is) : '—'}</td>
                       <td className="px-2 py-2 text-right tabular-nums">{Math.round(rec.confidence * 100)}%</td>
                       <td className="px-2 py-2 text-right tabular-nums">{rec.expected_impact && rec.expected_impact.delta_value !== 0 ? inr(rec.expected_impact.delta_value) : '—'}</td>
                       <td className="px-2 py-2 whitespace-nowrap">
@@ -250,8 +256,20 @@ export function Actions({ brandId, brandName }: Props) {
                     {open && (
                       <tr className="border-b last:border-0 bg-gray-50/60">
                         <td></td>
-                        <td colSpan={10} className="px-2 py-2">
+                        <td colSpan={12} className="px-2 py-2">
                           <div className="text-sm text-gray-700 mb-1">{rec.rationale}</div>
+                          {rec.diagnosis && <div className="text-xs text-indigo-700 mb-1">🔎 {rec.diagnosis}</div>}
+                          {rec.current && (rec.current.cpc || rec.current.cpm || rec.current.cvr || rec.current.lost_is_budget || rec.current.lost_is_rank) ? (
+                            <div className="text-xs text-gray-500 mb-1 flex gap-3 flex-wrap">
+                              <span>CTR {pf(rec.current.ctr)}</span>
+                              <span>CVR {pf(rec.current.cvr)}</span>
+                              <span>CPC {inr(rec.current.cpc)}</span>
+                              <span>CPM {inr(rec.current.cpm)}</span>
+                              <span>Search IS {pf(rec.current.search_is)}</span>
+                              <span>Lost IS (budget) {pf(rec.current.lost_is_budget)}</span>
+                              <span>Lost IS (rank) {pf(rec.current.lost_is_rank)}</span>
+                            </div>
+                          ) : null}
                           <div className="text-xs text-gray-400 mb-2">
                             {rec.hard_constraints?.length ? `Constraints: ${rec.hard_constraints.join(', ')}` : ''}
                             {rec.comment_count ? ` · ${rec.comment_count} comment(s)` : ''}
@@ -368,12 +386,14 @@ function countBy<T>(arr: T[], keyFn: (t: T) => string): Map<string, number> {
 function chipTone(reason: string): string {
   if (reason.startsWith('SCALE_UP')) return 'bg-green-100 text-green-700';
   if (reason.startsWith('SCALE_DOWN') || reason.startsWith('TIGHTEN')) return 'bg-amber-100 text-amber-700';
+  if (reason.startsWith('REVIEW')) return 'bg-indigo-100 text-indigo-700';
   if (reason.startsWith('PAUSE') || reason.startsWith('EXCLUDE')) return 'bg-red-100 text-red-700';
   return 'bg-gray-100 text-gray-600';
 }
 function bucketActive(key: string): string {
   if (key === 'scale_up') return 'bg-green-600 text-white';
   if (key === 'scale_down' || key === 'tighten') return 'bg-amber-600 text-white';
+  if (key === 'review') return 'bg-indigo-600 text-white';
   if (key === 'pause' || key === 'exclude') return 'bg-red-600 text-white';
   return 'bg-gray-700 text-white';
 }

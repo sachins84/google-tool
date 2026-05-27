@@ -391,6 +391,7 @@ export function initDatabase(): Database.Database {
   // Recommender follow-on columns (idempotent — safe on existing DBs)
   try { db.exec("ALTER TABLE recommendations ADD COLUMN bucket TEXT"); } catch { /* exists */ }
   try { db.exec("ALTER TABLE recommendations ADD COLUMN user_action TEXT"); } catch { /* exists */ }
+  try { db.exec("ALTER TABLE recommendations ADD COLUMN diagnosis TEXT"); } catch { /* exists */ }
   try { db.exec("ALTER TABLE recommendation_runs ADD COLUMN eval_window_days INTEGER"); } catch { /* exists */ }
 
   // Idempotent column adds — safe for already-initialised DBs
@@ -429,7 +430,7 @@ function seedDefaultRules(database: Database.Database): void {
       ['floor',      'asset_group', { metric: 'roas_post_rto', value: 2.0 }, 1],
       ['floor',      'keyword',     { metric: 'roas_post_rto', value: 1.5 }, 1],
       ['floor',      'ad',          { metric: 'roas_post_rto', value: 1.5 }, 1],
-      ['cap',        'campaign',    { metric: 'budget_step_pct', value: 0.20 }, 1],
+      ['cap',        'campaign',    { metric: 'budget_step_pct', value: 0.15 }, 1],
     ];
     for (const [kind, scope, json, isHard] of defaults) {
       insert.run(b.id, kind, scope, JSON.stringify(json), isHard);

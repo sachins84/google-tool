@@ -328,6 +328,7 @@ export interface Recommendation {
   hard_constraints: string[] | null;
   reason_codes: string[] | null;
   rationale: string | null;
+  diagnosis: string | null;
   status: string;
   audit_log_id: number | null;
 }

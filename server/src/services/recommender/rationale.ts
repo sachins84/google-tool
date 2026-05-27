@@ -6,6 +6,7 @@
 import type { CandidateAction } from './optimizer.js';
 
 const inr = (n: number): string => `₹${Math.round(n).toLocaleString('en-IN')}`;
+const diag = (a: CandidateAction): string => (a.diagnosis ? ` ${a.diagnosis}` : '');
 const x = (n: number): string => `${(Math.round(n * 100) / 100).toFixed(2)}x`;
 const pct = (a: number, b: number): string => (b ? `${Math.round(((a - b) / b) * 100)}%` : '0%');
 
@@ -19,15 +20,19 @@ export function buildRationale(a: CandidateAction, portfolioTarget: number): str
     case 'SCALE_UP': {
       const from = cur.daily_budget_inr ?? 0;
       const to = prop.daily_budget_inr ?? from;
-      return `Scale budget +${pct(to, from)} (${inr(from)}→${inr(to)}/day): post-RTO ROAS ${x(cur.roas_post_rto ?? 0)} is above the ${x(portfolioTarget)} portfolio target with headroom; redeploying freed budget here lifts blended value (${conf}).`;
+      return `Scale budget +${pct(to, from)} (${inr(from)}→${inr(to)}/day): post-RTO ROAS ${x(cur.roas_post_rto ?? 0)} is above the ${x(portfolioTarget)} portfolio target with headroom; redeploying freed budget here lifts blended value (${conf}).${diag(a)}`;
     }
     case 'SCALE_DOWN': {
       const from = cur.daily_budget_inr ?? 0;
       const to = prop.daily_budget_inr ?? from;
-      return `Trim budget ${pct(to, from)} (${inr(from)}→${inr(to)}/day): post-RTO ROAS ${x(cur.roas_post_rto ?? 0)} is below the campaign floor; capped at one step to protect Google's learning (${conf}).`;
+      return `Trim budget ${pct(to, from)} (${inr(from)}→${inr(to)}/day): post-RTO ROAS ${x(cur.roas_post_rto ?? 0)} is below the campaign floor; capped at one step to protect Google's learning (${conf}).${diag(a)}`;
     }
     case 'PAUSE_LOW_ROAS':
-      return `Pause: post-RTO ROAS ${x(cur.roas_post_rto ?? 0)} is far below the campaign floor and not recoverable by trimming; freed budget redeploys to winners (${conf}).`;
+      return `Pause: post-RTO ROAS ${x(cur.roas_post_rto ?? 0)} is far below the campaign floor and not recoverable by trimming; freed budget redeploys to winners (${conf}).${diag(a)}`;
+    case 'REVIEW_CREATIVE':
+      return `Flag for review (creative/relevance): ${a.diagnosis ?? 'CTR is well below the portfolio median'} Budget cuts won't fix this — needs new/stronger creative. Routed to a human (no auto-change).`;
+    case 'REVIEW_LANDING':
+      return `Flag for review (landing/offer): ${a.diagnosis ?? 'CVR trails the portfolio median'} Not a bid lever — check the landing page/offer. Routed to a human (no auto-change).`;
     case 'TIGHTEN_TROAS': {
       const from = cur.target_roas ?? 0;
       const to = prop.target_roas ?? from;

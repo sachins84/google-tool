@@ -140,14 +140,14 @@ function persistRecommendation(runId: number, brandId: number, source: 'rules' |
       `INSERT INTO recommendations
         (run_id, brand_id, source, level, customer_id, entity_id, entity_name, mutate_action, bucket,
          mutate_payload_json, current_json, proposed_json, score, confidence,
-         expected_impact_json, hard_constraints_json, reason_codes_json, rationale, status)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'pending')`
+         expected_impact_json, hard_constraints_json, reason_codes_json, rationale, diagnosis, status)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'pending')`
     )
     .run(
       runId, brandId, source, a.level, a.customer_id, a.entity_id, a.entity_name, a.mutate_action, bucket,
       JSON.stringify(a.mutate_payload), JSON.stringify(a.current), JSON.stringify(a.proposed),
       score, a.confidence, JSON.stringify(a.expected_impact), JSON.stringify(a.hard_constraints),
-      JSON.stringify(a.reason_codes), rationale
+      JSON.stringify(a.reason_codes), rationale, a.diagnosis ?? null
     );
 }
 
@@ -236,7 +236,13 @@ async function runBrand(runId: number, brandId: number, windowDays: number): Pro
         value_post_rto: value,
         roas_post_rto: roas,
         roas_pre_rto: r.metrics.roas_pre_rto,
+        ctr: r.metrics.ctr,
+        cpc: r.metrics.cpc,
+        cpm: r.metrics.cpm,
+        cvr: r.metrics.conversion_rate,
         lostISBudget: r.metrics.search_budget_lost_impression_share ?? null,
+        lostISRank: r.metrics.search_rank_lost_impression_share ?? null,
+        searchIS: r.metrics.search_impression_share ?? null,
         roas7d: roas,
         roas30d: roas30.get(key) ?? null,
         inLearning: learning.has(r.campaign_id as string),

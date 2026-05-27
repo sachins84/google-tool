@@ -46,7 +46,8 @@ const schema = z.object({
   RECOMMENDER_RUN_HOUR: z.coerce.number().min(0).max(23).default(6),
   // Max budget / tROAS step per single run (fraction of current). Caps how
   // aggressively we change a campaign so Google's bid algo stays stable.
-  RECOMMENDER_MAX_BUDGET_STEP_PCT: z.coerce.number().min(0.01).max(1).default(0.20),
+  // Scale-ups are additionally hard-capped at 15% in the optimizer.
+  RECOMMENDER_MAX_BUDGET_STEP_PCT: z.coerce.number().min(0.01).max(1).default(0.15),
   // Min conversions in the window before an action is allowed (noise guard).
   RECOMMENDER_MIN_DATA_CONV: z.coerce.number().min(0).default(15),
   // Days a campaign is treated as "in learning" after a structural change.

@@ -13,6 +13,7 @@ interface RecRow {
   mutate_payload_json: string; current_json: string | null; proposed_json: string | null;
   score: number; confidence: number; expected_impact_json: string | null;
   hard_constraints_json: string | null; reason_codes_json: string | null; rationale: string | null;
+  diagnosis: string | null;
   status: string; audit_log_id: number | null;
 }
 
@@ -25,7 +26,7 @@ function shape(r: RecRow, commentCount = 0): Record<string, unknown> {
     mutate_payload: parse(r.mutate_payload_json), current: parse(r.current_json), proposed: parse(r.proposed_json),
     score: r.score, confidence: r.confidence, expected_impact: parse(r.expected_impact_json),
     hard_constraints: parse(r.hard_constraints_json), reason_codes: parse(r.reason_codes_json),
-    rationale: r.rationale, status: r.status, audit_log_id: r.audit_log_id, comment_count: commentCount,
+    rationale: r.rationale, diagnosis: r.diagnosis, status: r.status, audit_log_id: r.audit_log_id, comment_count: commentCount,
   };
 }
 
