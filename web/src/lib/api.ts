@@ -272,11 +272,21 @@ export const api = {
     if (runDate) qs.set('run_date', runDate);
     return request<RecommendationsResponse>(`/api/recommendations?${qs.toString()}`);
   },
-  recommendationRun: (brandId: number) =>
+  recommendationRun: (brandId: number, windowDays?: number) =>
     request<{ ok: true; run_id: number }>('/api/recommendations/run', {
       method: 'POST',
-      body: JSON.stringify({ brand_id: brandId }),
+      body: JSON.stringify({ brand_id: brandId, window_days: windowDays }),
     }),
+  recommendationComments: (id: number) =>
+    request<{ comments: Array<{ id: number; username: string | null; comment: string; created_at: number }> }>(
+      `/api/recommendations/${id}/comments`
+    ),
+  recommendationAddComment: (id: number, comment: string) =>
+    request<{ ok: true }>(`/api/recommendations/${id}/comments`, { method: 'POST', body: JSON.stringify({ comment }) }),
+  recommendationSummary: (brandId: number, days = 30) =>
+    request<{ summary: Array<{ run_date: string; bucket: string; level: string; suggested: number; actioned: number; rejected: number; pending: number }> }>(
+      `/api/recommendations/summary?brand_id=${brandId}&days=${days}`
+    ),
   recommendationDecide: (
     id: number,
     body: { decision: 'accepted' | 'rejected' | 'overridden'; override_payload?: Record<string, unknown>; reason?: string }
@@ -306,6 +316,9 @@ export interface Recommendation {
   entity_id: string;
   entity_name: string | null;
   mutate_action: string;
+  bucket: string | null;
+  user_action: string | null;
+  comment_count: number;
   mutate_payload: Record<string, unknown>;
   current: Record<string, number> | null;
   proposed: Record<string, number> | null;
@@ -328,6 +341,7 @@ export interface RecommendationRun {
   current_blended_roas: number | null;
   projected_blended_roas: number | null;
   target_reachable: number | null;
+  eval_window_days: number | null;
   notes: string | null;
 }
 

@@ -9,21 +9,23 @@ import { applyFeedbackLearning } from '../services/recommender/feedback.js';
 interface RecRow {
   id: number; run_id: number; brand_id: number; source: string; level: string;
   customer_id: string; entity_id: string; entity_name: string | null; mutate_action: string;
+  bucket: string | null; user_action: string | null;
   mutate_payload_json: string; current_json: string | null; proposed_json: string | null;
   score: number; confidence: number; expected_impact_json: string | null;
   hard_constraints_json: string | null; reason_codes_json: string | null; rationale: string | null;
   status: string; audit_log_id: number | null;
 }
 
-function shape(r: RecRow): Record<string, unknown> {
+function shape(r: RecRow, commentCount = 0): Record<string, unknown> {
   const parse = (s: string | null): unknown => { try { return s ? JSON.parse(s) : null; } catch { return null; } };
   return {
     id: r.id, run_id: r.run_id, source: r.source, level: r.level, customer_id: r.customer_id,
     entity_id: r.entity_id, entity_name: r.entity_name, mutate_action: r.mutate_action,
+    bucket: r.bucket, user_action: r.user_action,
     mutate_payload: parse(r.mutate_payload_json), current: parse(r.current_json), proposed: parse(r.proposed_json),
     score: r.score, confidence: r.confidence, expected_impact: parse(r.expected_impact_json),
     hard_constraints: parse(r.hard_constraints_json), reason_codes: parse(r.reason_codes_json),
-    rationale: r.rationale, status: r.status, audit_log_id: r.audit_log_id,
+    rationale: r.rationale, status: r.status, audit_log_id: r.audit_log_id, comment_count: commentCount,
   };
 }
 
@@ -48,8 +50,14 @@ export async function recommendationRoutes(app: FastifyInstance): Promise<void> 
     if (!run) return { run: null, rules: [], engine: [], diff: [] };
 
     const all = db.prepare('SELECT * FROM recommendations WHERE run_id=? ORDER BY score DESC').all(run.id) as RecRow[];
-    const rules = all.filter((r) => r.source === 'rules').map(shape);
-    const engine = all.filter((r) => r.source === 'engine').map(shape);
+    const counts = new Map<number, number>(
+      (db.prepare(
+        `SELECT recommendation_id AS id, COUNT(*) AS n FROM recommendation_comments
+         WHERE recommendation_id IN (SELECT id FROM recommendations WHERE run_id=?) GROUP BY recommendation_id`
+      ).all(run.id) as Array<{ id: number; n: number }>).map((r) => [r.id, r.n])
+    );
+    const rules = all.filter((r) => r.source === 'rules').map((r) => shape(r, counts.get(r.id) ?? 0));
+    const engine = all.filter((r) => r.source === 'engine').map((r) => shape(r, counts.get(r.id) ?? 0));
 
     // Diff joins on (level, entity_id, mutate_action). Rank = position in each sorted list.
     const key = (r: Record<string, unknown>): string => `${r.level}|${r.entity_id}|${r.mutate_action}`;
@@ -89,13 +97,55 @@ export async function recommendationRoutes(app: FastifyInstance): Promise<void> 
   });
 
   // Manually trigger a run (testing / on-demand). Returns 409 if today's run exists.
+  // window_days = the metric evaluation window the user chose.
   app.post('/run', async (req, reply) => {
-    const q = z.object({ brand_id: z.coerce.number() }).safeParse(req.body);
+    const q = z.object({ brand_id: z.coerce.number(), window_days: z.coerce.number().min(1).max(90).optional() }).safeParse(req.body);
     if (!q.success) return reply.code(400).send({ error: q.error.flatten() });
     if (!getBrand(q.data.brand_id)) return reply.code(404).send({ error: 'Brand not found' });
-    const runId = startBrandRun(q.data.brand_id, 'manual');
-    if (!runId) return reply.code(409).send({ error: "Today's run already exists for this brand" });
+    const runId = startBrandRun(q.data.brand_id, 'manual', q.data.window_days);
+    if (!runId) return reply.code(409).send({ error: "Today's run already exists for this brand — open it or come back tomorrow" });
     return { ok: true, run_id: runId };
+  });
+
+  // Date-stamped comments on a recommendation (backtrack rationale).
+  app.get('/:id/comments', async (req) => {
+    const id = Number((req.params as { id: string }).id);
+    const rows = getDb()
+      .prepare('SELECT id, username, comment, created_at FROM recommendation_comments WHERE recommendation_id=? ORDER BY created_at')
+      .all(id);
+    return { comments: rows };
+  });
+
+  app.post('/:id/comments', async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    const parsed = z.object({ comment: z.string().min(1).max(2000) }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    const rec = getDb().prepare('SELECT id FROM recommendations WHERE id=?').get(id);
+    if (!rec) return reply.code(404).send({ error: 'Recommendation not found' });
+    getDb()
+      .prepare('INSERT INTO recommendation_comments (recommendation_id, user_id, username, comment) VALUES (?,?,?,?)')
+      .run(id, req.user?.id ?? null, req.user?.username ?? null, parsed.data.comment);
+    return { ok: true };
+  });
+
+  // Daily suggestions-vs-actions check, grouped by bucket + level.
+  app.get('/summary', async (req, reply) => {
+    const q = z.object({ brand_id: z.coerce.number(), days: z.coerce.number().min(1).max(90).default(30) }).safeParse(req.query);
+    if (!q.success) return reply.code(400).send({ error: q.error.flatten() });
+    // Engine source only (avoids double-counting the rules mirror). actioned =
+    // accepted/overridden/executed; the rest are rejected or still pending.
+    const rows = getDb().prepare(
+      `SELECT rr.run_date AS run_date, r.bucket AS bucket, r.level AS level,
+              COUNT(*) AS suggested,
+              SUM(CASE WHEN r.status IN ('accepted','overridden','executed') THEN 1 ELSE 0 END) AS actioned,
+              SUM(CASE WHEN r.status='rejected' THEN 1 ELSE 0 END) AS rejected,
+              SUM(CASE WHEN r.status='pending' THEN 1 ELSE 0 END) AS pending
+       FROM recommendations r JOIN recommendation_runs rr ON rr.id = r.run_id
+       WHERE r.brand_id = ? AND r.source = 'engine' AND rr.run_date >= date('now', ?)
+       GROUP BY rr.run_date, r.bucket, r.level
+       ORDER BY rr.run_date DESC, r.bucket, r.level`
+    ).all(q.data.brand_id, `-${q.data.days} days`);
+    return { summary: rows };
   });
 
   // Accept / reject / override a recommendation. Accept+override execute through
@@ -122,7 +172,7 @@ export async function recommendationRoutes(app: FastifyInstance): Promise<void> 
     };
 
     if (decision === 'rejected') {
-      db.prepare(`UPDATE recommendations SET status='rejected' WHERE id=?`).run(id);
+      db.prepare(`UPDATE recommendations SET status='rejected', user_action='rejected' WHERE id=?`).run(id);
       recordDecision(null);
       return { ok: true, status: 'rejected' };
     }
@@ -144,7 +194,8 @@ export async function recommendationRoutes(app: FastifyInstance): Promise<void> 
       return reply.code(500).send({ error: 'Execution failed', detail: safeJson(live.body) });
     }
     const auditId = (live.json() as { audit_id?: number }).audit_id ?? null;
-    db.prepare(`UPDATE recommendations SET status='executed', audit_log_id=? WHERE id=?`).run(auditId, id);
+    db.prepare(`UPDATE recommendations SET status='executed', user_action=?, audit_log_id=? WHERE id=?`)
+      .run(decision === 'overridden' ? 'overridden' : 'accepted', auditId, id);
     recordDecision(decision === 'overridden' ? JSON.stringify(override_payload) : null);
     return { ok: true, status: 'executed', audit_log_id: auditId };
   });

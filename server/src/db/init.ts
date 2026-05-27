@@ -374,7 +374,24 @@ export function initDatabase(): Database.Database {
       PRIMARY KEY (rule_id, reason_code),
       FOREIGN KEY (rule_id) REFERENCES rules(id) ON DELETE CASCADE
     );
+
+    -- Date-stamped comments on a recommendation, so rationale can be backtracked.
+    CREATE TABLE IF NOT EXISTS recommendation_comments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      recommendation_id INTEGER NOT NULL,
+      user_id INTEGER,
+      username TEXT,
+      comment TEXT NOT NULL,
+      created_at INTEGER DEFAULT (strftime('%s','now')),
+      FOREIGN KEY (recommendation_id) REFERENCES recommendations(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_reccomment_rec ON recommendation_comments(recommendation_id);
   `);
+
+  // Recommender follow-on columns (idempotent — safe on existing DBs)
+  try { db.exec("ALTER TABLE recommendations ADD COLUMN bucket TEXT"); } catch { /* exists */ }
+  try { db.exec("ALTER TABLE recommendations ADD COLUMN user_action TEXT"); } catch { /* exists */ }
+  try { db.exec("ALTER TABLE recommendation_runs ADD COLUMN eval_window_days INTEGER"); } catch { /* exists */ }
 
   // Idempotent column adds — safe for already-initialised DBs
   try { db.exec('ALTER TABLE brands ADD COLUMN revenue_rto_factor REAL'); } catch { /* already exists */ }

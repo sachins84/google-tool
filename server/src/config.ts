@@ -53,6 +53,8 @@ const schema = z.object({
   RECOMMENDER_LEARNING_PHASE_DAYS: z.coerce.number().min(0).default(14),
   // Cooldown: don't re-touch a campaign mutated within this many days.
   RECOMMENDER_COOLDOWN_DAYS: z.coerce.number().min(0).default(7),
+  // Default evaluation window (days) when the user doesn't pick one.
+  RECOMMENDER_DEFAULT_WINDOW_DAYS: z.coerce.number().min(1).max(90).default(7),
 });
 
 const parsed = schema.safeParse(process.env);

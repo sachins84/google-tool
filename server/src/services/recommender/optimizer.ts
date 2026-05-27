@@ -83,6 +83,22 @@ export interface SubEntityInput {
   parentInLearning?: boolean;
 }
 
+/** Coarse action bucket for filtering + the daily suggestions-vs-actions check. */
+export type ActionBucket = 'scale_up' | 'scale_down' | 'pause' | 'exclude' | 'tighten' | 'hold';
+
+export function bucketForReason(code: string): ActionBucket {
+  switch (code) {
+    case 'SCALE_UP': return 'scale_up';
+    case 'SCALE_DOWN': return 'scale_down';
+    case 'TIGHTEN_TROAS': return 'tighten';
+    case 'EXCLUDE_KW': return 'exclude';
+    case 'PAUSE_LOW_ROAS':
+    case 'PAUSE_ASSET_GROUP':
+    case 'PAUSE_POOR_AD': return 'pause';
+    default: return 'hold';
+  }
+}
+
 export interface CandidateAction {
   level: RecLevel;
   customer_id: string;

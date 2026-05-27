@@ -11,6 +11,7 @@ import { config } from '../../config.js';
 import { fetchRowsForBrand, type Row } from '../../routes/performance.js';
 import {
   optimizePortfolio,
+  bucketForReason,
   type CampaignInput,
   type SubEntityInput,
   type OptimizerConfig,
@@ -57,7 +58,7 @@ function buildOptimizerConfig(brandId: number): { cfg: OptimizerConfig; portfoli
     },
     maxBudgetStepPct: val('cap', 'campaign', config.RECOMMENDER_MAX_BUDGET_STEP_PCT),
     minDataConv: config.RECOMMENDER_MIN_DATA_CONV,
-    windowDays: 7,
+    windowDays: config.RECOMMENDER_DEFAULT_WINDOW_DAYS,
     learningPhaseDays: config.RECOMMENDER_LEARNING_PHASE_DAYS,
     cooldownDays: config.RECOMMENDER_COOLDOWN_DAYS,
   };
@@ -133,64 +134,70 @@ function writeSnapshots(brandId: number, today: string, window: string, level: s
 }
 
 function persistRecommendation(runId: number, brandId: number, source: 'rules' | 'engine', a: CandidateAction, score: number, rationale: string): void {
+  const bucket = bucketForReason(a.reason_codes[0] ?? '');
   getDb()
     .prepare(
       `INSERT INTO recommendations
-        (run_id, brand_id, source, level, customer_id, entity_id, entity_name, mutate_action,
+        (run_id, brand_id, source, level, customer_id, entity_id, entity_name, mutate_action, bucket,
          mutate_payload_json, current_json, proposed_json, score, confidence,
          expected_impact_json, hard_constraints_json, reason_codes_json, rationale, status)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'pending')`
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'pending')`
     )
     .run(
-      runId, brandId, source, a.level, a.customer_id, a.entity_id, a.entity_name, a.mutate_action,
+      runId, brandId, source, a.level, a.customer_id, a.entity_id, a.entity_name, a.mutate_action, bucket,
       JSON.stringify(a.mutate_payload), JSON.stringify(a.current), JSON.stringify(a.proposed),
       score, a.confidence, JSON.stringify(a.expected_impact), JSON.stringify(a.hard_constraints),
       JSON.stringify(a.reason_codes), rationale
     );
 }
 
-/** Insert the run row (dedupe lock) and detach the pipeline. Returns runId or null if a run already exists today. */
-export function startBrandRun(brandId: number, trigger: 'scheduled' | 'manual'): number | null {
+/**
+ * Insert the run row (dedupe lock) and detach the pipeline. Returns runId or
+ * null if a run already exists today. `windowDays` is the user-chosen metric
+ * evaluation window (defaults to config).
+ */
+export function startBrandRun(brandId: number, trigger: 'scheduled' | 'manual', windowDays?: number): number | null {
   const db = getDb();
   const today = dateStr(new Date());
+  const win = windowDays && windowDays > 0 ? Math.round(windowDays) : config.RECOMMENDER_DEFAULT_WINDOW_DAYS;
   let runId: number;
   try {
     const res = db
-      .prepare(`INSERT INTO recommendation_runs (brand_id, run_date, trigger, status, started_at) VALUES (?,?,?, 'running', ?)`)
-      .run(brandId, today, trigger, now());
+      .prepare(`INSERT INTO recommendation_runs (brand_id, run_date, trigger, status, eval_window_days, started_at) VALUES (?,?,?, 'running', ?, ?)`)
+      .run(brandId, today, trigger, win, now());
     runId = res.lastInsertRowid as number;
   } catch {
     return null; // UNIQUE(brand_id, run_date) → already ran today
   }
-  void runBrand(runId, brandId).catch((err) => {
+  void runBrand(runId, brandId, win).catch((err) => {
     const msg = err instanceof Error ? err.message : String(err);
     getDb().prepare(`UPDATE recommendation_runs SET status='failed', error=?, finished_at=? WHERE id=?`).run(msg, now(), runId);
   });
   return runId;
 }
 
-async function runBrand(runId: number, brandId: number): Promise<void> {
+async function runBrand(runId: number, brandId: number, windowDays: number): Promise<void> {
   const today = dateStr(new Date());
   const { cfg, portfolioTarget } = buildOptimizerConfig(brandId);
+  cfg.windowDays = windowDays; // user-chosen evaluation window
+  const winLabel = `${windowDays}d`;
 
-  // ── Phase 1: snapshot (campaign over 1/7/14/30d; sub-entities over 7d) ─────
-  const [c1, c7, c14, c30, agRows, agpRows, adRows, kwRows] = await Promise.all([
-    fetchRowsForBrand('campaign', brandId, dateMinus(1), today),
-    fetchRowsForBrand('campaign', brandId, dateMinus(7), today),
-    fetchRowsForBrand('campaign', brandId, dateMinus(14), today),
+  // ── Phase 1: snapshot (campaign over chosen window + 30d slope + 1d trend; sub-entities over the chosen window)
+  const [cW, c30, c1, agpRows, adRows, kwRows] = await Promise.all([
+    fetchRowsForBrand('campaign', brandId, dateMinus(windowDays), today),
     fetchRowsForBrand('campaign', brandId, dateMinus(30), today),
-    fetchRowsForBrand('ad_group', brandId, dateMinus(7), today),
-    fetchRowsForBrand('asset_group', brandId, dateMinus(7), today),
-    fetchRowsForBrand('ad', brandId, dateMinus(7), today),
-    fetchRowsForBrand('keyword', brandId, dateMinus(7), today),
+    fetchRowsForBrand('campaign', brandId, dateMinus(1), today),
+    fetchRowsForBrand('asset_group', brandId, dateMinus(windowDays), today),
+    fetchRowsForBrand('ad', brandId, dateMinus(windowDays), today),
+    fetchRowsForBrand('keyword', brandId, dateMinus(windowDays), today),
   ]);
-  writeSnapshots(brandId, today, '1d', 'campaign', c1);
-  writeSnapshots(brandId, today, '7d', 'campaign', c7);
-  writeSnapshots(brandId, today, '14d', 'campaign', c14);
-  writeSnapshots(brandId, today, '30d', 'campaign', c30);
-  writeSnapshots(brandId, today, '7d', 'asset_group', agpRows);
-  writeSnapshots(brandId, today, '7d', 'ad', adRows);
-  writeSnapshots(brandId, today, '7d', 'keyword', kwRows);
+  const c7 = cW; // primary window rows feed the optimizer
+  writeSnapshots(brandId, today, winLabel, 'campaign', cW);
+  if (winLabel !== '30d') writeSnapshots(brandId, today, '30d', 'campaign', c30);
+  if (winLabel !== '1d') writeSnapshots(brandId, today, '1d', 'campaign', c1);
+  writeSnapshots(brandId, today, winLabel, 'asset_group', agpRows);
+  writeSnapshots(brandId, today, winLabel, 'ad', adRows);
+  writeSnapshots(brandId, today, winLabel, 'keyword', kwRows);
 
   // ── Phase 2: assemble optimizer input ─────────────────────────────────────
   const learning = buildLearningSet(brandId, cfg.learningPhaseDays, cfg.cooldownDays);
