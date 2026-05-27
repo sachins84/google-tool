@@ -38,7 +38,7 @@ const querySchema = z.object({
   asset_group_id: z.string().optional(),
 });
 
-interface Row {
+export interface Row {
   customer_id: string;
   campaign_id?: string;
   campaign_name?: string;

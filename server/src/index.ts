@@ -20,6 +20,9 @@ import { audienceRoutes } from './routes/audiences.js';
 import { productRoutes } from './routes/products.js';
 import { videoAssetRoutes } from './routes/video-assets.js';
 import { youtubeRoutes } from './routes/youtube.js';
+import { recommendationRoutes } from './routes/recommendations.js';
+import { ruleRoutes } from './routes/rules.js';
+import { startRecommenderScheduler } from './services/recommender/scheduler.js';
 
 async function main(): Promise<void> {
   initDatabase();
@@ -50,6 +53,8 @@ async function main(): Promise<void> {
   await app.register(productRoutes, { prefix: '/api/products' });
   await app.register(videoAssetRoutes, { prefix: '/api/video-assets' });
   await app.register(youtubeRoutes, { prefix: '/api/youtube' });
+  await app.register(recommendationRoutes, { prefix: '/api/recommendations' });
+  await app.register(ruleRoutes, { prefix: '/api/rules' });
 
   // MCP server — public (or token-gated via MCP_SECRET). Mounted outside /api/* so
   // it bypasses the session-cookie auth middleware.
@@ -68,6 +73,8 @@ async function main(): Promise<void> {
 
   await app.listen({ port: config.PORT, host: '0.0.0.0' });
   console.log(`[server] listening on http://localhost:${config.PORT}`);
+
+  startRecommenderScheduler();
 }
 
 main().catch((err) => {

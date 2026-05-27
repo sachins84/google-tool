@@ -265,7 +265,99 @@ export const api = {
 
   ytJob: (id: number) =>
     request<{ job: YoutubeJob; rows: YoutubeJobRow[] }>(`/api/youtube/jobs/${id}`),
+
+  // ── Recommender ──────────────────────────────────────────────────────
+  recommendations: (brandId: number, runDate?: string) => {
+    const qs = new URLSearchParams({ brand_id: String(brandId) });
+    if (runDate) qs.set('run_date', runDate);
+    return request<RecommendationsResponse>(`/api/recommendations?${qs.toString()}`);
+  },
+  recommendationRun: (brandId: number) =>
+    request<{ ok: true; run_id: number }>('/api/recommendations/run', {
+      method: 'POST',
+      body: JSON.stringify({ brand_id: brandId }),
+    }),
+  recommendationDecide: (
+    id: number,
+    body: { decision: 'accepted' | 'rejected' | 'overridden'; override_payload?: Record<string, unknown>; reason?: string }
+  ) =>
+    request<{ ok: true; status: string; audit_log_id?: number | null }>(`/api/recommendations/${id}/decision`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  recommendationTrend: (brandId: number, window = '7d') =>
+    request<{ series: Array<{ date: string; cost: number; value: number; blended_roas: number }> }>(
+      `/api/recommendations/trend?brand_id=${brandId}&window=${window}`
+    ),
+
+  rulesList: (brandId: number) => request<{ rules: Rule[] }>(`/api/rules?brand_id=${brandId}`),
+  ruleCreate: (body: RulePayload) =>
+    request<{ ok: true; id: number }>('/api/rules', { method: 'POST', body: JSON.stringify(body) }),
+  ruleUpdate: (id: number, body: Partial<Pick<RulePayload, 'predicate' | 'enabled' | 'is_hard'>>) =>
+    request<{ ok: true }>(`/api/rules/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  ruleDelete: (id: number) => request<{ ok: true }>(`/api/rules/${id}`, { method: 'DELETE' }),
 };
+
+export interface Recommendation {
+  id: number;
+  source: 'rules' | 'engine';
+  level: string;
+  customer_id: string;
+  entity_id: string;
+  entity_name: string | null;
+  mutate_action: string;
+  mutate_payload: Record<string, unknown>;
+  current: Record<string, number> | null;
+  proposed: Record<string, number> | null;
+  score: number;
+  confidence: number;
+  expected_impact: { delta_value: number; delta_cost: number } | null;
+  hard_constraints: string[] | null;
+  reason_codes: string[] | null;
+  rationale: string | null;
+  status: string;
+  audit_log_id: number | null;
+}
+
+export interface RecommendationRun {
+  id: number;
+  brand_id: number;
+  run_date: string;
+  status: string;
+  portfolio_target_roas: number | null;
+  current_blended_roas: number | null;
+  projected_blended_roas: number | null;
+  target_reachable: number | null;
+  notes: string | null;
+}
+
+export interface RecommendationsResponse {
+  run: RecommendationRun | null;
+  rules: Recommendation[];
+  engine: Recommendation[];
+  diff: Array<{ key: string; in: 'both' | 'rules_only' | 'engine_only'; rank_rules: number | null; rank_engine: number | null }>;
+}
+
+export interface Rule {
+  id: number;
+  brand_id: number | null;
+  origin: 'default' | 'manual';
+  kind: string;
+  scope_level: string | null;
+  predicate: { metric: string; channel?: string; value: number; comparator?: string } | null;
+  weight: number;
+  enabled: boolean;
+  is_hard: boolean;
+}
+
+export interface RulePayload {
+  brand_id: number;
+  kind: string;
+  scope_level: string;
+  predicate: { metric: string; channel?: string; value: number; comparator?: 'gte' | 'lte' };
+  is_hard?: boolean;
+  enabled?: boolean;
+}
 
 export interface YoutubeChannel {
   key: string;

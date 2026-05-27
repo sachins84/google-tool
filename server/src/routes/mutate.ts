@@ -497,7 +497,7 @@ export async function mutateRoutes(app: FastifyInstance): Promise<void> {
       const loginCustomerId = (await getLoginCustomerId(body.customer_id)) ?? undefined;
       const response = await mutate(body.customer_id, operations, body.dry_run, loginCustomerId);
 
-      recordAudit({
+      const auditId = recordAudit({
         user_id: req.user?.id ?? null,
         action: actionLabel,
         brand_id: body.brand_id,
@@ -509,7 +509,7 @@ export async function mutateRoutes(app: FastifyInstance): Promise<void> {
         response_json: response,
       });
 
-      return { ok: true, dry_run: body.dry_run, response };
+      return { ok: true, dry_run: body.dry_run, audit_id: auditId, response };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
 

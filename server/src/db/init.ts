@@ -253,6 +253,127 @@ export function initDatabase(): Database.Database {
       thumbnail TEXT,
       fetched_at INTEGER
     );
+
+    -- ════════════════════════════════════════════════════════════════════
+    -- Recommender system (portfolio = brand). All in-process, no external AI.
+    -- ════════════════════════════════════════════════════════════════════
+
+    -- One row per (brand, day) generation run. UNIQUE(brand_id, run_date) is the
+    -- dedupe lock the scheduler relies on to avoid duplicate daily runs.
+    CREATE TABLE IF NOT EXISTS recommendation_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      brand_id INTEGER NOT NULL,
+      run_date TEXT NOT NULL,                 -- 'YYYY-MM-DD'
+      trigger TEXT DEFAULT 'scheduled',       -- scheduled | manual
+      status TEXT NOT NULL DEFAULT 'running', -- running | completed | failed
+      portfolio_target_roas REAL,
+      current_blended_roas REAL,
+      projected_blended_roas REAL,
+      target_reachable INTEGER,
+      config_json TEXT,
+      notes TEXT,
+      error TEXT,
+      started_at INTEGER,
+      finished_at INTEGER,
+      created_at INTEGER DEFAULT (strftime('%s','now')),
+      UNIQUE (brand_id, run_date),
+      FOREIGN KEY (brand_id) REFERENCES brands(id) ON DELETE CASCADE
+    );
+
+    -- One row per candidate action. source distinguishes the raw rules engine
+    -- from the adaptive (feedback-weighted) engine for the manual-vs-AI view.
+    CREATE TABLE IF NOT EXISTS recommendations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id INTEGER NOT NULL,
+      brand_id INTEGER NOT NULL,
+      source TEXT NOT NULL,                   -- 'rules' | 'engine'
+      level TEXT NOT NULL,                    -- campaign|ad_group|asset_group|ad|keyword
+      customer_id TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      entity_name TEXT,                       -- aggregate label only, no PII
+      mutate_action TEXT NOT NULL,            -- maps to /api/mutate; 'monitor' = no-op
+      mutate_payload_json TEXT NOT NULL,      -- exact POST /api/mutate body (minus dry_run)
+      current_json TEXT,
+      proposed_json TEXT,
+      score REAL,
+      confidence REAL,
+      expected_impact_json TEXT,
+      hard_constraints_json TEXT,
+      reason_codes_json TEXT,
+      rationale TEXT,
+      status TEXT NOT NULL DEFAULT 'pending', -- pending|accepted|rejected|overridden|executed|expired|superseded
+      audit_log_id INTEGER,                   -- set when executed → joins audit_log
+      created_at INTEGER DEFAULT (strftime('%s','now')),
+      FOREIGN KEY (run_id) REFERENCES recommendation_runs(id) ON DELETE CASCADE,
+      FOREIGN KEY (brand_id) REFERENCES brands(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_rec_run ON recommendations(run_id);
+    CREATE INDEX IF NOT EXISTS idx_rec_brand_status ON recommendations(brand_id, status);
+
+    -- Guardrails. origin='default' seeded per brand; 'manual' from the rule builder.
+    CREATE TABLE IF NOT EXISTS rules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      brand_id INTEGER,                       -- NULL = global default
+      origin TEXT NOT NULL,                   -- 'default' | 'manual'
+      kind TEXT NOT NULL,                     -- floor | cap | weight | exclusion | preference
+      scope_level TEXT,                       -- campaign|asset_group|keyword|ad|portfolio
+      json TEXT NOT NULL,                     -- { metric, channel?, value, comparator? }
+      weight REAL DEFAULT 1.0,
+      enabled INTEGER DEFAULT 1,
+      is_hard INTEGER DEFAULT 0,              -- 1 = inviolable; feedback never relaxes it
+      created_at INTEGER DEFAULT (strftime('%s','now')),
+      FOREIGN KEY (brand_id) REFERENCES brands(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_rules_brand ON rules(brand_id, enabled);
+
+    -- One row per user decision on a recommendation.
+    CREATE TABLE IF NOT EXISTS recommendation_feedback (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      recommendation_id INTEGER NOT NULL,
+      user_id INTEGER,
+      decision TEXT NOT NULL,                 -- accepted | rejected | overridden
+      override_payload_json TEXT,
+      reason TEXT,
+      reason_codes_json TEXT,
+      created_at INTEGER DEFAULT (strftime('%s','now')),
+      FOREIGN KEY (recommendation_id) REFERENCES recommendations(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_fb_rec ON recommendation_feedback(recommendation_id);
+
+    -- Metric snapshots — the persistence layer for trend / over-time evaluation.
+    CREATE TABLE IF NOT EXISTS metric_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      brand_id INTEGER NOT NULL,
+      snapshot_date TEXT NOT NULL,            -- 'YYYY-MM-DD' the snapshot was taken
+      window TEXT NOT NULL,                   -- '1d'|'7d'|'14d'|'30d'
+      level TEXT NOT NULL,
+      customer_id TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      entity_name TEXT,
+      cost REAL, conversions REAL, conversions_value REAL,
+      roas_pre_rto REAL, roas_post_rto REAL,
+      ncs REAL, ncs_amount REAL, calc_roas REAL,  -- null below campaign level
+      daily_budget_inr REAL, target_roas REAL, bidding_strategy_type TEXT,
+      channel_type TEXT, ad_strength TEXT, search_impression_share REAL,
+      search_budget_lost_impression_share REAL,
+      created_at INTEGER DEFAULT (strftime('%s','now')),
+      UNIQUE (brand_id, snapshot_date, window, level, customer_id, entity_id),
+      FOREIGN KEY (brand_id) REFERENCES brands(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_snap_brand_date ON metric_snapshots(brand_id, snapshot_date, level);
+
+    -- Per-(rule, reason_code) acceptance learning state (EWMA).
+    CREATE TABLE IF NOT EXISTS rule_weight_state (
+      rule_id INTEGER NOT NULL,
+      reason_code TEXT NOT NULL,
+      accepts INTEGER DEFAULT 0,
+      rejects INTEGER DEFAULT 0,
+      overrides INTEGER DEFAULT 0,
+      ewma_acceptance REAL DEFAULT 0.5,
+      last_updated INTEGER,
+      PRIMARY KEY (rule_id, reason_code),
+      FOREIGN KEY (rule_id) REFERENCES rules(id) ON DELETE CASCADE
+    );
   `);
 
   // Idempotent column adds — safe for already-initialised DBs
@@ -264,8 +385,40 @@ export function initDatabase(): Database.Database {
   bootstrapAdmin(db);
   bootstrapDefaultBrand(db);
   applyBrandPresetsToExistingBrands(db);
+  seedDefaultRules(db);
 
   return db;
+}
+
+/**
+ * Seed a baseline guardrail set for any brand that has none. Idempotent — only
+ * inserts when a brand has zero rules, so manual edits are never clobbered.
+ * These default rows ARE the OptimizerConfig: the portfolio target + per-level
+ * ROAS floors + the per-run budget step cap. Floors/caps are is_hard=1 so the
+ * feedback loop can never relax them.
+ */
+function seedDefaultRules(database: Database.Database): void {
+  const brands = database.prepare('SELECT id FROM brands').all() as Array<{ id: number }>;
+  const insert = database.prepare(
+    `INSERT INTO rules (brand_id, origin, kind, scope_level, json, weight, enabled, is_hard)
+     VALUES (?, 'default', ?, ?, ?, 1.0, 1, ?)`
+  );
+  for (const b of brands) {
+    const has = database.prepare('SELECT 1 FROM rules WHERE brand_id = ? LIMIT 1').get(b.id);
+    if (has) continue;
+    const defaults: Array<[string, string, Record<string, unknown>, number]> = [
+      ['preference', 'portfolio',   { metric: 'roas_post_rto', value: 4.0 }, 1],
+      ['floor',      'campaign',    { metric: 'roas_post_rto', value: 2.0 }, 1],
+      ['floor',      'asset_group', { metric: 'roas_post_rto', value: 2.0 }, 1],
+      ['floor',      'keyword',     { metric: 'roas_post_rto', value: 1.5 }, 1],
+      ['floor',      'ad',          { metric: 'roas_post_rto', value: 1.5 }, 1],
+      ['cap',        'campaign',    { metric: 'budget_step_pct', value: 0.20 }, 1],
+    ];
+    for (const [kind, scope, json, isHard] of defaults) {
+      insert.run(b.id, kind, scope, JSON.stringify(json), isHard);
+    }
+    console.log(`[init] Seeded default recommender guardrails for brand ${b.id}`);
+  }
 }
 
 /**

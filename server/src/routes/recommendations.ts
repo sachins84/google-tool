@@ -1,0 +1,155 @@
+import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
+import { requireAuth } from '../middleware/auth.js';
+import { getDb } from '../db/init.js';
+import { getBrand } from '../services/brands.js';
+import { startBrandRun } from '../services/recommender/runner.js';
+import { applyFeedbackLearning } from '../services/recommender/feedback.js';
+
+interface RecRow {
+  id: number; run_id: number; brand_id: number; source: string; level: string;
+  customer_id: string; entity_id: string; entity_name: string | null; mutate_action: string;
+  mutate_payload_json: string; current_json: string | null; proposed_json: string | null;
+  score: number; confidence: number; expected_impact_json: string | null;
+  hard_constraints_json: string | null; reason_codes_json: string | null; rationale: string | null;
+  status: string; audit_log_id: number | null;
+}
+
+function shape(r: RecRow): Record<string, unknown> {
+  const parse = (s: string | null): unknown => { try { return s ? JSON.parse(s) : null; } catch { return null; } };
+  return {
+    id: r.id, run_id: r.run_id, source: r.source, level: r.level, customer_id: r.customer_id,
+    entity_id: r.entity_id, entity_name: r.entity_name, mutate_action: r.mutate_action,
+    mutate_payload: parse(r.mutate_payload_json), current: parse(r.current_json), proposed: parse(r.proposed_json),
+    score: r.score, confidence: r.confidence, expected_impact: parse(r.expected_impact_json),
+    hard_constraints: parse(r.hard_constraints_json), reason_codes: parse(r.reason_codes_json),
+    rationale: r.rationale, status: r.status, audit_log_id: r.audit_log_id,
+  };
+}
+
+const decisionSchema = z.object({
+  decision: z.enum(['accepted', 'rejected', 'overridden']),
+  override_payload: z.record(z.string(), z.unknown()).optional(), // full action-specific body for an override
+  reason: z.string().optional(),
+});
+
+export async function recommendationRoutes(app: FastifyInstance): Promise<void> {
+  app.addHook('preHandler', requireAuth);
+
+  // Latest (or specified) run with manual-rules vs engine side-by-side + diff.
+  app.get('/', async (req, reply) => {
+    const q = z.object({ brand_id: z.coerce.number(), run_date: z.string().optional() }).safeParse(req.query);
+    if (!q.success) return reply.code(400).send({ error: q.error.flatten() });
+    const db = getDb();
+    const run = (q.data.run_date
+      ? db.prepare('SELECT * FROM recommendation_runs WHERE brand_id=? AND run_date=?').get(q.data.brand_id, q.data.run_date)
+      : db.prepare(`SELECT * FROM recommendation_runs WHERE brand_id=? AND status='completed' ORDER BY run_date DESC LIMIT 1`).get(q.data.brand_id)
+    ) as { id: number } | undefined;
+    if (!run) return { run: null, rules: [], engine: [], diff: [] };
+
+    const all = db.prepare('SELECT * FROM recommendations WHERE run_id=? ORDER BY score DESC').all(run.id) as RecRow[];
+    const rules = all.filter((r) => r.source === 'rules').map(shape);
+    const engine = all.filter((r) => r.source === 'engine').map(shape);
+
+    // Diff joins on (level, entity_id, mutate_action). Rank = position in each sorted list.
+    const key = (r: Record<string, unknown>): string => `${r.level}|${r.entity_id}|${r.mutate_action}`;
+    const rankOf = (list: Record<string, unknown>[], k: string): number => list.findIndex((r) => key(r) === k);
+    const keys = new Set([...rules.map(key), ...engine.map(key)]);
+    const diff = [...keys].map((k) => {
+      const rr = rankOf(rules, k), er = rankOf(engine, k);
+      return {
+        key: k,
+        in: rr >= 0 && er >= 0 ? 'both' : rr >= 0 ? 'rules_only' : 'engine_only',
+        rank_rules: rr >= 0 ? rr + 1 : null,
+        rank_engine: er >= 0 ? er + 1 : null,
+      };
+    });
+
+    return { run, rules, engine, diff };
+  });
+
+  // Trend: blended post-RTO ROAS over snapshot dates.
+  app.get('/trend', async (req, reply) => {
+    const q = z.object({ brand_id: z.coerce.number(), window: z.string().default('7d') }).safeParse(req.query);
+    if (!q.success) return reply.code(400).send({ error: q.error.flatten() });
+    const rows = getDb().prepare(
+      `SELECT snapshot_date,
+              SUM(cost) AS cost,
+              SUM(COALESCE(ncs_amount, conversions_value)) AS value
+       FROM metric_snapshots
+       WHERE brand_id=? AND level='campaign' AND window=?
+       GROUP BY snapshot_date ORDER BY snapshot_date`
+    ).all(q.data.brand_id, q.data.window) as Array<{ snapshot_date: string; cost: number; value: number }>;
+    return {
+      series: rows.map((r) => ({
+        date: r.snapshot_date, cost: r.cost, value: r.value,
+        blended_roas: r.cost > 0 ? Math.round((r.value / r.cost) * 100) / 100 : 0,
+      })),
+    };
+  });
+
+  // Manually trigger a run (testing / on-demand). Returns 409 if today's run exists.
+  app.post('/run', async (req, reply) => {
+    const q = z.object({ brand_id: z.coerce.number() }).safeParse(req.body);
+    if (!q.success) return reply.code(400).send({ error: q.error.flatten() });
+    if (!getBrand(q.data.brand_id)) return reply.code(404).send({ error: 'Brand not found' });
+    const runId = startBrandRun(q.data.brand_id, 'manual');
+    if (!runId) return reply.code(409).send({ error: "Today's run already exists for this brand" });
+    return { ok: true, run_id: runId };
+  });
+
+  // Accept / reject / override a recommendation. Accept+override execute through
+  // the existing /api/mutate pipeline (dry-run first) so every change is audited.
+  app.post('/:id/decision', async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    const parsed = decisionSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    const { decision, override_payload, reason } = parsed.data;
+
+    const db = getDb();
+    const rec = db.prepare('SELECT * FROM recommendations WHERE id=?').get(id) as RecRow | undefined;
+    if (!rec) return reply.code(404).send({ error: 'Recommendation not found' });
+    if (rec.status !== 'pending') return reply.code(409).send({ error: `Already ${rec.status}` });
+    if (rec.mutate_action === 'monitor') return reply.code(400).send({ error: 'Monitor rows are informational — nothing to apply' });
+
+    const reasonCodes = (() => { try { return JSON.parse(rec.reason_codes_json ?? '[]') as string[]; } catch { return []; } })();
+    const recordDecision = (overrideJson: string | null): void => {
+      db.prepare(
+        `INSERT INTO recommendation_feedback (recommendation_id, user_id, decision, override_payload_json, reason, reason_codes_json)
+         VALUES (?,?,?,?,?,?)`
+      ).run(id, req.user?.id ?? null, decision, overrideJson, reason ?? null, JSON.stringify(reasonCodes));
+      applyFeedbackLearning(rec.brand_id, reasonCodes, decision);
+    };
+
+    if (decision === 'rejected') {
+      db.prepare(`UPDATE recommendations SET status='rejected' WHERE id=?`).run(id);
+      recordDecision(null);
+      return { ok: true, status: 'rejected' };
+    }
+
+    // accept or override → execute via /api/mutate (dry-run, then live)
+    const actionPayload = decision === 'overridden' && override_payload
+      ? override_payload
+      : (JSON.parse(rec.mutate_payload_json) as Record<string, unknown>);
+    const body = { ...actionPayload, brand_id: rec.brand_id, customer_id: rec.customer_id };
+    const cookie = req.headers.cookie ?? '';
+    const headers = { cookie, 'content-type': 'application/json' };
+
+    const dry = await app.inject({ method: 'POST', url: '/api/mutate', headers, payload: { ...body, dry_run: true } });
+    if (dry.statusCode !== 200) {
+      return reply.code(422).send({ error: 'Dry-run failed', detail: safeJson(dry.body) });
+    }
+    const live = await app.inject({ method: 'POST', url: '/api/mutate', headers, payload: { ...body, dry_run: false } });
+    if (live.statusCode !== 200) {
+      return reply.code(500).send({ error: 'Execution failed', detail: safeJson(live.body) });
+    }
+    const auditId = (live.json() as { audit_id?: number }).audit_id ?? null;
+    db.prepare(`UPDATE recommendations SET status='executed', audit_log_id=? WHERE id=?`).run(auditId, id);
+    recordDecision(decision === 'overridden' ? JSON.stringify(override_payload) : null);
+    return { ok: true, status: 'executed', audit_log_id: auditId };
+  });
+}
+
+function safeJson(body: string): unknown {
+  try { return JSON.parse(body); } catch { return body; }
+}

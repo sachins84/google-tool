@@ -36,6 +36,23 @@ const schema = z.object({
   YT_REFRESH_TOKEN: z.string().optional(),
   // Optional override for default-channel display label
   YT_DEFAULT_CHANNEL_LABEL: z.string().optional(),
+
+  // ── Recommender system ──────────────────────────────────────────────
+  // Master switch for the daily scheduler. Routes work regardless; this only
+  // controls the background timer (manual POST /run always works).
+  ENABLE_RECOMMENDER: z.coerce.boolean().default(false),
+  // Hour of day (0-23, server local) after which the daily run is allowed —
+  // gives upstream Google/Redshift data time to settle.
+  RECOMMENDER_RUN_HOUR: z.coerce.number().min(0).max(23).default(6),
+  // Max budget / tROAS step per single run (fraction of current). Caps how
+  // aggressively we change a campaign so Google's bid algo stays stable.
+  RECOMMENDER_MAX_BUDGET_STEP_PCT: z.coerce.number().min(0.01).max(1).default(0.20),
+  // Min conversions in the window before an action is allowed (noise guard).
+  RECOMMENDER_MIN_DATA_CONV: z.coerce.number().min(0).default(15),
+  // Days a campaign is treated as "in learning" after a structural change.
+  RECOMMENDER_LEARNING_PHASE_DAYS: z.coerce.number().min(0).default(14),
+  // Cooldown: don't re-touch a campaign mutated within this many days.
+  RECOMMENDER_COOLDOWN_DAYS: z.coerce.number().min(0).default(7),
 });
 
 const parsed = schema.safeParse(process.env);

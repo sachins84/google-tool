@@ -4,6 +4,7 @@ import { Performance } from './Performance';
 import { Settings } from './Settings';
 import { Audit } from './Audit';
 import { Insights } from './Insights';
+import { Actions } from './Actions';
 import { YoutubeUploader } from './YoutubeUploader';
 import { api } from '../lib/api';
 
@@ -61,6 +62,15 @@ export function Dashboard({ username, onLogout }: Props) {
           <Audit />
         ) : view === 'youtube' ? (
           <YoutubeUploader />
+        ) : view === 'actions' ? (
+          state.brandId ? (
+            <Actions
+              brandId={state.brandId}
+              brandName={brands.find((b) => b.id === state.brandId)?.name ?? ''}
+            />
+          ) : (
+            <div className="text-sm text-gray-500 py-8 text-center">Select a brand above.</div>
+          )
         ) : view === 'insights' ? (
           state.brandId && state.from && state.to ? (
             <Insights
