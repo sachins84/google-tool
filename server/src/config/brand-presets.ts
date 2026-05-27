@@ -18,9 +18,9 @@ interface BrandPreset {
 // any future suffixed variants — including malformed strings like
 // 'google_Pmax&utm_source=...' from URL-chain bugs).
 const PRESETS: Record<string, BrandPreset> = {
-  littlejoys:  { funnel_table: 'mw_nexus.lj_funnel_daily', utm_source_list: ['google%'] },
-  manmatters:  { funnel_table: 'mw_nexus.mm_funnel_daily', utm_source_list: ['google%'] },
-  bebodywise:  { funnel_table: 'mw_nexus.bw_funnel_daily', utm_source_list: ['google%'] },
+  littlejoys:  { funnel_table: 'mw_nexus.lj_google_funnel_daily', utm_source_list: ['google%'] },
+  manmatters:  { funnel_table: 'mw_nexus.mm_google_funnel_daily', utm_source_list: ['google%'] },
+  bebodywise:  { funnel_table: 'mw_nexus.bw_google_funnel_daily', utm_source_list: ['google%'] },
 };
 
 /** Strip non-alphanumerics + lowercase so 'Be Bodywise' / 'BeBodywise' / 'be-bodywise' all match. */

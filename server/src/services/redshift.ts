@@ -56,7 +56,7 @@ export interface FunnelMetricsTotal {
 }
 
 export interface FetchOptions {
-  funnelTable: string;             // e.g. 'mw_nexus.lj_funnel_daily'
+  funnelTable: string;             // e.g. 'mw_nexus.lj_google_funnel_daily'
   utmSourceList: string[];         // e.g. ['google_Pmax','google_Search','google_DG','google_pla','google']
   dateFrom: string;                // 'YYYY-MM-DD'
   dateTo: string;                  // 'YYYY-MM-DD'

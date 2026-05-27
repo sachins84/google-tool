@@ -93,7 +93,7 @@ export function deriveMetrics(raw: RawMetrics): DerivedMetrics {
 /**
  * Attach Redshift-sourced post-RTO fields (NCs, AOV, calc CPA, calc ROAS).
  *
- * Funnel data (lj_funnel_daily etc.) is GROSS — at-order-time numbers, before
+ * Funnel data (lj_google_funnel_daily etc.) is GROSS — at-order-time numbers, before
  * RTO and refunds are netted out. We apply per-brand RTO factors:
  *   - nc_rto_factor: % of NCs that get cancelled (RTO'd before delivery)
  *   - revenue_rto_factor: % of revenue lost to RTO + refunds (typically higher

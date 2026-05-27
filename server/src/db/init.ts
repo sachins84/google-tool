@@ -320,7 +320,7 @@ function bootstrapDefaultBrand(database: Database.Database): void {
            VALUES (?, ?, ?, ?, 1)`
         ).run(
           lj.id,
-          'mw_nexus.lj_funnel_daily',
+          'mw_nexus.lj_google_funnel_daily',
           JSON.stringify(['google_Pmax', 'google_Search', 'google_DG', 'google_pla', 'google_Pmax_RM', 'google']),
           'mixed'
         );
@@ -343,9 +343,9 @@ function bootstrapDefaultBrand(database: Database.Database): void {
      VALUES (?, ?, ?, ?, 1)`
   ).run(
     brandId,
-    'mw_nexus.lj_funnel_daily',
+    'mw_nexus.lj_google_funnel_daily',
     JSON.stringify(['google_Pmax', 'google_Search', 'google_DG', 'google_pla', 'google_Pmax_RM', 'google']),
     'mixed'
   );
-  console.log('[init] Seeded Little Joys → 4812797582 with Redshift RTO mode (mw_nexus.lj_funnel_daily)');
+  console.log('[init] Seeded Little Joys → 4812797582 with Redshift RTO mode (mw_nexus.lj_google_funnel_daily)');
 }
