@@ -160,6 +160,14 @@ export function startBrandRun(brandId: number, trigger: 'scheduled' | 'manual', 
   const db = getDb();
   const today = dateStr(new Date());
   const win = windowDays && windowDays > 0 ? Math.round(windowDays) : config.RECOMMENDER_DEFAULT_WINDOW_DAYS;
+
+  // Manual "Run now" regenerates: drop today's run (cascade clears its recs +
+  // comments) so the operator can re-run, e.g. with a different window.
+  // Scheduled runs keep the once-a-day dedupe (insert simply fails below).
+  if (trigger === 'manual') {
+    db.prepare('DELETE FROM recommendation_runs WHERE brand_id = ? AND run_date = ?').run(brandId, today);
+  }
+
   let runId: number;
   try {
     const res = db
@@ -167,7 +175,7 @@ export function startBrandRun(brandId: number, trigger: 'scheduled' | 'manual', 
       .run(brandId, today, trigger, win, now());
     runId = res.lastInsertRowid as number;
   } catch {
-    return null; // UNIQUE(brand_id, run_date) → already ran today
+    return null; // UNIQUE(brand_id, run_date) → scheduled run already exists today
   }
   void runBrand(runId, brandId, win).catch((err) => {
     const msg = err instanceof Error ? err.message : String(err);
