@@ -70,6 +70,13 @@ export interface CampaignInput {
   roas7d?: number | null;
   roas30d?: number | null;
   inLearning: boolean; // precomputed by the runner (start_date + audit history)
+  // Per-campaign guardrail overrides resolved by the runner from scoped rules
+  // (specific-campaign > campaign-type > portfolio default). Undefined ⇒ use cfg.
+  floorOverride?: number | null;  // campaign ROAS floor
+  ctrFloor?: number | null;       // min CTR before it's a creative problem
+  cvrFloor?: number | null;       // min CVR before it's a landing problem
+  cpcCap?: number | null;         // max CPC (cost concern)
+  cpmCap?: number | null;         // max CPM (cost concern)
 }
 
 export interface SubEntityInput {
@@ -129,15 +136,17 @@ function median(xs: number[]): number {
  *  - EFFICIENCY:  unprofitable with no single funnel culprit → spend control.
  */
 export function diagnose(
-  c: { roas_post_rto: number; ctr?: number | null; cvr?: number | null; lostISBudget?: number | null; lostISRank?: number | null },
+  c: { roas_post_rto: number; ctr?: number | null; cvr?: number | null; lostISBudget?: number | null; lostISRank?: number | null; ctrFloor?: number | null; cvrFloor?: number | null },
   target: number,
   med: { ctr: number; cvr: number }
 ): { bottleneck: Bottleneck; text: string } {
   const pct = (n: number | null | undefined): string => `${Math.round((n ?? 0) * 100)}%`;
   const budgetLost = c.lostISBudget ?? 0;
   const rankLost = c.lostISRank ?? 0;
-  const lowCtr = med.ctr > 0 && c.ctr != null && c.ctr < 0.6 * med.ctr;
-  const lowCvr = med.cvr > 0 && c.cvr != null && c.cvr < 0.6 * med.cvr;
+  // An explicit scoped CTR/CVR floor (from a rule) takes precedence over the
+  // portfolio-median heuristic.
+  const lowCtr = (c.ctrFloor != null && c.ctr != null && c.ctr < c.ctrFloor) || (med.ctr > 0 && c.ctr != null && c.ctr < 0.6 * med.ctr);
+  const lowCvr = (c.cvrFloor != null && c.cvr != null && c.cvr < c.cvrFloor) || (med.cvr > 0 && c.cvr != null && c.cvr < 0.6 * med.cvr);
 
   if (c.roas_post_rto >= target) {
     if (budgetLost >= 0.1) return { bottleneck: 'CONSTRAINED', text: `Efficient and losing ${pct(budgetLost)} impression share to budget — room to capture more volume.` };
@@ -223,6 +232,7 @@ export function optimizePortfolio(input: PortfolioInput): OptimizerResult {
     roas: number;
     conf: number;
     mRoas: number;
+    floor: number; // effective per-campaign ROAS floor (scoped rule or default)
     deltaCost: number; // accumulated daily deltas applied by the allocator
     deltaValue: number;
   }
@@ -232,21 +242,21 @@ export function optimizePortfolio(input: PortfolioInput): OptimizerResult {
     const dailyValue = c.value_post_rto / days;
     const roas = c.roas_post_rto || blendedRoas(c.cost, c.value_post_rto);
     const conf = clamp(0, 1, cfg.minDataConv > 0 ? c.conversions / cfg.minDataConv : 1);
-    return { ...c, dailyCost, dailyValue, roas, conf, mRoas: roas * (1 - saturation(c)), deltaCost: 0, deltaValue: 0 };
+    const floor = c.floorOverride ?? cfg.floors.campaign;
+    return { ...c, dailyCost, dailyValue, roas, conf, floor, mRoas: roas * (1 - saturation(c)), deltaCost: 0, deltaValue: 0 };
   });
 
   const sumCost = () => W.reduce((s, c) => s + c.dailyCost + c.deltaCost, 0);
   const sumValue = () => W.reduce((s, c) => s + c.dailyValue + c.deltaValue, 0);
   const currentBlended = blendedRoas(W.reduce((s, c) => s + c.dailyCost, 0), W.reduce((s, c) => s + c.dailyValue, 0));
   const target = cfg.portfolioTargetRoas;
-  const campFloor = cfg.floors.campaign;
 
-  // Partition.
+  // Partition — each campaign against its OWN (possibly scoped) floor.
   const frozen = W.filter((c) => c.inLearning || c.conf < 1);
   const eligible = W.filter((c) => !c.inLearning && c.conf >= 1);
   const winners = eligible.filter((c) => c.roas >= target).sort((a, b) => b.mRoas - a.mRoas);
-  const losers = eligible.filter((c) => c.roas < campFloor).sort((a, b) => a.roas - b.roas);
-  const mids = eligible.filter((c) => c.roas >= campFloor && c.roas < target);
+  const losers = eligible.filter((c) => c.roas < c.floor).sort((a, b) => a.roas - b.roas);
+  const mids = eligible.filter((c) => c.roas >= c.floor && c.roas < target);
 
   // Portfolio medians for relative CTR/CVR judgement (diagnosis).
   const med = {
@@ -267,7 +277,7 @@ export function optimizePortfolio(input: PortfolioInput): OptimizerResult {
   // ── Step 1: harvest from losers — but pick the lever from the diagnosis ────
   for (const c of losers) {
     const d = diagnose(c, target, med);
-    const catastrophic = c.roas < campFloor * kill || c.value_post_rto <= 0;
+    const catastrophic = c.roas < c.floor * kill || c.value_post_rto <= 0;
     if (catastrophic) {
       // Bleeding hard → pause regardless of cause (cite the diagnosis).
       actions.push({
@@ -275,9 +285,9 @@ export function optimizePortfolio(input: PortfolioInput): OptimizerResult {
         mutate_action: 'pause',
         mutate_payload: { action: 'pause', level: 'campaign', campaign_id: c.campaign_id },
         current: curOf(c), proposed: { status: 0 },
-        baseScore: c.dailyCost * (campFloor - c.roas), confidence: c.conf,
+        baseScore: c.dailyCost * (c.floor - c.roas), confidence: c.conf,
         expected_impact: { delta_value: -round(c.dailyValue), delta_cost: -round(c.dailyCost) },
-        hard_constraints: [`floor.campaign=${campFloor}`], reason_codes: ['PAUSE_LOW_ROAS'], diagnosis: d.text,
+        hard_constraints: [`floor.campaign=${c.floor}`], reason_codes: ['PAUSE_LOW_ROAS'], diagnosis: d.text,
       });
       c.deltaCost -= c.dailyCost; c.deltaValue -= c.dailyValue;
       addFreed(c.customer_id, Math.min(c.dailyCost, c.daily_budget_inr));
@@ -288,7 +298,7 @@ export function optimizePortfolio(input: PortfolioInput): OptimizerResult {
         level: 'campaign', customer_id: c.customer_id, entity_id: c.campaign_id, entity_name: c.campaign_name,
         mutate_action: 'monitor', mutate_payload: { action: 'monitor' },
         current: curOf(c), proposed: {},
-        baseScore: c.dailyCost * (campFloor - c.roas), confidence: c.conf,
+        baseScore: c.dailyCost * (c.floor - c.roas), confidence: c.conf,
         expected_impact: { delta_value: 0, delta_cost: 0 }, hard_constraints: [],
         reason_codes: [d.bottleneck === 'CREATIVE' ? 'REVIEW_CREATIVE' : 'REVIEW_LANDING'], diagnosis: d.text,
       });
@@ -301,9 +311,9 @@ export function optimizePortfolio(input: PortfolioInput): OptimizerResult {
         mutate_action: 'update_budget',
         mutate_payload: { action: 'update_budget', campaign_id: c.campaign_id, daily_budget_inr: newBudget },
         current: curOf(c), proposed: { daily_budget_inr: newBudget },
-        baseScore: reduceDaily * (campFloor - c.roas), confidence: c.conf,
+        baseScore: reduceDaily * (c.floor - c.roas), confidence: c.conf,
         expected_impact: { delta_value: -round(reduceDaily * c.roas), delta_cost: -round(reduceDaily) },
-        hard_constraints: [`floor.campaign=${campFloor}`, `step<=${cfg.maxBudgetStepPct}`],
+        hard_constraints: [`floor.campaign=${c.floor}`, `step<=${cfg.maxBudgetStepPct}`],
         reason_codes: ['SCALE_DOWN'], diagnosis: d.text,
       });
       c.deltaCost -= reduceDaily; c.deltaValue -= reduceDaily * c.roas;

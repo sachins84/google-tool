@@ -148,7 +148,12 @@ export function Actions({ brandId, brandName }: Props) {
       {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">{error}</div>}
 
       {showSummary && <DailyCheck brandId={brandId} />}
-      {showRules && <RulesPanel brandId={brandId} />}
+      {showRules && (
+        <RulesPanel
+          brandId={brandId}
+          campaigns={dedupeCampaigns(data?.engine ?? [])}
+        />
+      )}
 
       {/* Source toggle */}
       <div className="flex items-center gap-2 flex-wrap">
@@ -404,3 +409,8 @@ function actionTone(a: string): string {
   return 'bg-gray-100 text-gray-600';
 }
 function trunc(s: string, n: number): string { return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+function dedupeCampaigns(recs: Recommendation[]): Array<{ id: string; name: string }> {
+  const m = new Map<string, string>();
+  for (const r of recs) if (r.level === 'campaign' && r.entity_id) m.set(r.entity_id, r.entity_name ?? r.entity_id);
+  return [...m].map(([id, name]) => ({ id, name }));
+}

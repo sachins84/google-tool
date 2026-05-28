@@ -65,6 +65,54 @@ function buildOptimizerConfig(brandId: number): { cfg: OptimizerConfig; portfoli
   return { cfg, portfolioTarget };
 }
 
+interface ScopedRule { kind: string; scope_level: string; metric: string; channel?: string; campaign_id?: string; value: number }
+
+/** Load enabled floor/cap rules with their parsed predicates for per-campaign resolution. */
+function loadScopedRules(brandId: number): ScopedRule[] {
+  const rows = getDb()
+    .prepare(`SELECT kind, scope_level, json FROM rules WHERE (brand_id = ? OR brand_id IS NULL) AND enabled = 1 AND kind IN ('floor','cap')`)
+    .all(brandId) as Array<{ kind: string; scope_level: string; json: string }>;
+  const out: ScopedRule[] = [];
+  for (const r of rows) {
+    try {
+      const p = JSON.parse(r.json) as { metric: string; channel?: string; campaign_id?: string; value: number };
+      out.push({ kind: r.kind, scope_level: r.scope_level, metric: p.metric, channel: p.channel, campaign_id: p.campaign_id, value: Number(p.value) });
+    } catch { /* skip malformed */ }
+  }
+  return out;
+}
+
+/**
+ * Resolve a campaign's effective guardrails by precedence:
+ *   specific-campaign (3) > campaign-type/channel (2) > generic campaign rule (1).
+ */
+function resolveOverrides(rules: ScopedRule[], camp: { campaign_id: string; channel_type?: string }): {
+  floorOverride: number | null; ctrFloor: number | null; cvrFloor: number | null; cpcCap: number | null; cpmCap: number | null;
+} {
+  const precedence = (r: ScopedRule): number => {
+    if (r.campaign_id && r.campaign_id === camp.campaign_id) return 3;
+    if (r.channel && r.channel !== 'ALL' && r.channel === camp.channel_type) return 2;
+    if (r.scope_level === 'campaign' && !r.campaign_id && (!r.channel || r.channel === 'ALL')) return 1;
+    return -1;
+  };
+  const pick = (kind: string, metric: string): number | null => {
+    let best: number | null = null, bestP = 0;
+    for (const r of rules) {
+      if (r.kind !== kind || r.metric !== metric) continue;
+      const p = precedence(r);
+      if (p > bestP) { bestP = p; best = r.value; }
+    }
+    return best;
+  };
+  return {
+    floorOverride: pick('floor', 'roas_post_rto'),
+    ctrFloor: pick('floor', 'ctr'),
+    cvrFloor: pick('floor', 'cvr'),
+    cpcCap: pick('cap', 'cpc'),
+    cpmCap: pick('cap', 'cpm'),
+  };
+}
+
 /**
  * Campaign IDs treated as "in learning" — changed within the learning window,
  * either by an executed recommendation (reliable campaign id) or a recent manual
@@ -209,6 +257,7 @@ async function runBrand(runId: number, brandId: number, windowDays: number): Pro
 
   // ── Phase 2: assemble optimizer input ─────────────────────────────────────
   const learning = buildLearningSet(brandId, cfg.learningPhaseDays, cfg.cooldownDays);
+  const scopedRules = loadScopedRules(brandId);
   const roas30 = new Map<string, number>();
   for (const r of c30) if (r.campaign_id) roas30.set(`${r.customer_id}|${r.campaign_id}`, campaignValue(r.metrics).roas);
   const roas7 = new Map<string, number>();
@@ -222,6 +271,7 @@ async function runBrand(runId: number, brandId: number, windowDays: number): Pro
       roas7.set(key, roas);
       const ratio = r.metrics.roas_pre_rto > 0 ? Math.min(1, r.metrics.roas_post_rto / r.metrics.roas_pre_rto) : 1;
       rtoRatio.set(r.campaign_id as string, ratio);
+      const ov = resolveOverrides(scopedRules, { campaign_id: r.campaign_id as string, channel_type: r.channel_type });
       return {
         customer_id: r.customer_id,
         campaign_id: r.campaign_id as string,
@@ -231,6 +281,11 @@ async function runBrand(runId: number, brandId: number, windowDays: number): Pro
         bidding_strategy_type: r.bidding_strategy_type,
         daily_budget_inr: r.daily_budget_inr ?? 0,
         target_roas: null,
+        floorOverride: ov.floorOverride,
+        ctrFloor: ov.ctrFloor,
+        cvrFloor: ov.cvrFloor,
+        cpcCap: ov.cpcCap,
+        cpmCap: ov.cpmCap,
         cost: r.metrics.cost,
         conversions: r.metrics.conversions,
         value_post_rto: value,

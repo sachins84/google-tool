@@ -10,9 +10,15 @@ import { getBrand } from '../services/brands.js';
  * enforced by the optimizer and never relaxed by the feedback loop.
  */
 
+// Metrics a guardrail can condition on. roas_post_rto + budget_step_pct drive the
+// optimizer directly; ctr/cvr/cpc/cpm refine the diagnosis & lever selection.
+const METRICS = ['roas_post_rto', 'budget_step_pct', 'ctr', 'cvr', 'cpc', 'cpm', 'search_is', 'lost_is_budget', 'lost_is_rank'] as const;
+const CHANNELS = ['ALL', 'SEARCH', 'PERFORMANCE_MAX', 'SHOPPING', 'DISPLAY', 'VIDEO'] as const;
+
 const predicateSchema = z.object({
-  metric: z.string().min(1),         // e.g. roas_post_rto | budget_step_pct
-  channel: z.string().optional(),    // SEARCH | PMAX | SHOPPING | ALL
+  metric: z.enum(METRICS),
+  channel: z.enum(CHANNELS).optional(),   // campaign-type scope
+  campaign_id: z.string().regex(/^\d+$/).optional(), // specific-campaign scope
   value: z.number(),
   comparator: z.enum(['gte', 'lte']).optional(),
 });

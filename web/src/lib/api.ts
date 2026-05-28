@@ -359,7 +359,7 @@ export interface Rule {
   origin: 'default' | 'manual';
   kind: string;
   scope_level: string | null;
-  predicate: { metric: string; channel?: string; value: number; comparator?: string } | null;
+  predicate: { metric: string; channel?: string; campaign_id?: string; value: number; comparator?: string } | null;
   weight: number;
   enabled: boolean;
   is_hard: boolean;
@@ -369,7 +369,7 @@ export interface RulePayload {
   brand_id: number;
   kind: string;
   scope_level: string;
-  predicate: { metric: string; channel?: string; value: number; comparator?: 'gte' | 'lte' };
+  predicate: { metric: string; channel?: string; campaign_id?: string; value: number; comparator?: 'gte' | 'lte' };
   is_hard?: boolean;
   enabled?: boolean;
 }
