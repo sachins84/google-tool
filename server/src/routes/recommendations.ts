@@ -5,6 +5,8 @@ import { getDb } from '../db/init.js';
 import { getBrand } from '../services/brands.js';
 import { startBrandRun } from '../services/recommender/runner.js';
 import { applyFeedbackLearning } from '../services/recommender/feedback.js';
+import { recommendMix, type ChannelState } from '../services/recommender/portfolio_mix.js';
+import { config } from '../config.js';
 
 interface RecRow {
   id: number; run_id: number; brand_id: number; source: string; level: string;
@@ -127,6 +129,88 @@ export async function recommendationRoutes(app: FastifyInstance): Promise<void> 
       .prepare('INSERT INTO recommendation_comments (recommendation_id, user_id, username, comment) VALUES (?,?,?,?)')
       .run(id, req.user?.id ?? null, req.user?.username ?? null, parsed.data.comment);
     return { ok: true };
+  });
+
+  // Channel-level capital allocation: current vs recommended spend mix per
+  // campaign type, aggregated from the latest metric_snapshots. Strategic
+  // guidance — execution still flows through the per-campaign approve path.
+  app.get('/mix', async (req, reply) => {
+    const q = z.object({ brand_id: z.coerce.number(), window: z.string().default('7d') }).safeParse(req.query);
+    if (!q.success) return reply.code(400).send({ error: q.error.flatten() });
+    const db = getDb();
+    // Use the most recent snapshot_date we have for this window (matches the
+    // latest run's snapshots so the panel never shows stale aggregates).
+    const latest = db.prepare(
+      `SELECT MAX(snapshot_date) AS d FROM metric_snapshots WHERE brand_id=? AND window=? AND level='campaign'`
+    ).get(q.data.brand_id, q.data.window) as { d: string | null } | undefined;
+    if (!latest?.d) return { date: null, run_window_days: null, mix: null, halo_rules: [] };
+    const windowDays = Number((q.data.window || '7d').replace(/[^0-9]/g, '')) || 7;
+
+    const rows = db.prepare(
+      `SELECT channel_type,
+              SUM(cost) AS cost,
+              SUM(COALESCE(ncs_amount, conversions_value)) AS value,
+              AVG(search_budget_lost_impression_share) AS lost_is_budget
+       FROM metric_snapshots
+       WHERE brand_id=? AND snapshot_date=? AND window=? AND level='campaign' AND channel_type IS NOT NULL
+       GROUP BY channel_type`
+    ).all(q.data.brand_id, latest.d, q.data.window) as Array<{ channel_type: string; cost: number; value: number; lost_is_budget: number | null }>;
+
+    // Halo bonuses from rules (kind='preference', metric='halo_bonus', channel=X).
+    // Defaults to 0 if no rule exists for a channel — the user explicitly chose
+    // pure direct-ROAS allocation; halo machinery is wired but inert by default.
+    const haloRules = db.prepare(
+      `SELECT json FROM rules WHERE (brand_id=? OR brand_id IS NULL) AND enabled=1
+        AND kind='preference' AND COALESCE(json_extract(json,'$.metric'),'')='halo_bonus'`
+    ).all(q.data.brand_id) as Array<{ json: string }>;
+    const halo: Record<string, number> = {};
+    for (const r of haloRules) {
+      try {
+        const p = JSON.parse(r.json) as { channel?: string; value: number };
+        if (p.channel) halo[p.channel] = Number(p.value);
+      } catch { /* skip malformed */ }
+    }
+
+    // Per-channel min/max share rules (kind='cap'/'floor' metric='spend_share' channel=X).
+    // Defaults: floor 0, cap 0.7.
+    const shareRules = db.prepare(
+      `SELECT kind, json FROM rules WHERE (brand_id=? OR brand_id IS NULL) AND enabled=1
+        AND scope_level='campaign' AND COALESCE(json_extract(json,'$.metric'),'')='spend_share'`
+    ).all(q.data.brand_id) as Array<{ kind: string; json: string }>;
+    const shareFloor: Record<string, number> = {};
+    const shareCap: Record<string, number> = {};
+    for (const r of shareRules) {
+      try {
+        const p = JSON.parse(r.json) as { channel?: string; value: number };
+        if (!p.channel) continue;
+        if (r.kind === 'floor') shareFloor[p.channel] = Number(p.value);
+        else if (r.kind === 'cap') shareCap[p.channel] = Number(p.value);
+      } catch { /* skip */ }
+    }
+
+    // Portfolio target from rules
+    const portfolioTarget = (() => {
+      const r = db.prepare(`SELECT json FROM rules WHERE brand_id=? AND enabled=1 AND kind='preference' AND scope_level='portfolio' LIMIT 1`).get(q.data.brand_id) as { json: string } | undefined;
+      try { return r ? Number((JSON.parse(r.json) as { value: number }).value) : 4.0; } catch { return 4.0; }
+    })();
+
+    const channels: ChannelState[] = rows
+      .filter((r) => r.cost > 0)
+      .map((r) => ({
+        channel: r.channel_type,
+        spend: r.cost / windowDays,
+        value: (r.value ?? 0) / windowDays,
+        direct_roas: r.cost > 0 ? (r.value ?? 0) / r.cost : 0,
+        lost_is_budget: r.lost_is_budget,
+        halo_bonus: halo[r.channel_type] ?? 0,
+      }));
+
+    const mix = recommendMix(channels, {
+      portfolioTargetRoas: portfolioTarget,
+      shareFloor, shareCap,
+      maxStepPct: Math.min(config.RECOMMENDER_MAX_BUDGET_STEP_PCT, 0.15),
+    });
+    return { date: latest.d, window: q.data.window, run_window_days: windowDays, mix, halo_rules: Object.entries(halo).map(([channel, value]) => ({ channel, value })) };
   });
 
   // Daily suggestions-vs-actions check, grouped by bucket + level.

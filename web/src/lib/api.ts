@@ -287,6 +287,29 @@ export const api = {
     request<{ summary: Array<{ run_date: string; bucket: string; level: string; suggested: number; actioned: number; rejected: number; pending: number }> }>(
       `/api/recommendations/summary?brand_id=${brandId}&days=${days}`
     ),
+  recommendationMix: (brandId: number, window = '7d') =>
+    request<{
+      date: string | null;
+      window?: string;
+      run_window_days: number | null;
+      mix: {
+        channels: Array<{
+          channel: string;
+          current_share: number; current_spend: number; current_value: number;
+          direct_roas: number; halo_bonus: number;
+          effective_roas: number; marginal_effective_roas: number;
+          recommended_share: number; delta_share: number; delta_spend: number;
+          rationale: string;
+        }>;
+        current_blended_direct_roas: number;
+        projected_blended_direct_roas: number;
+        total_daily_spend: number;
+        total_daily_value: number;
+        target_reachable: boolean;
+        notes: string[];
+      } | null;
+      halo_rules: Array<{ channel: string; value: number }>;
+    }>(`/api/recommendations/mix?brand_id=${brandId}&window=${window}`),
   recommendationDecide: (
     id: number,
     body: { decision: 'accepted' | 'rejected' | 'overridden'; override_payload?: Record<string, unknown>; reason?: string }

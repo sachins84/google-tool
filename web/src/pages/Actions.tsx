@@ -36,6 +36,7 @@ export function Actions({ brandId, brandName }: Props) {
   const [running, setRunning] = useState(false);
   const [showRules, setShowRules] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
+  const [showMix, setShowMix] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [overrideId, setOverrideId] = useState<number | null>(null);
   const [overrideVal, setOverrideVal] = useState<string>('');
@@ -140,6 +141,7 @@ export function Actions({ brandId, brandName }: Props) {
         <button onClick={runNow} disabled={running} className="px-3 py-1.5 rounded bg-black text-white text-xs disabled:opacity-50">{running ? 'Running…' : 'Run now'}</button>
         <span className="text-xs text-gray-400">re-running replaces today's run</span>
         <div className="flex-1" />
+        <button onClick={() => setShowMix((s) => !s)} className="px-3 py-1.5 rounded border text-xs hover:bg-gray-50">{showMix ? 'Hide channel mix' : 'Channel mix'}</button>
         <button onClick={() => setShowSummary((s) => !s)} className="px-3 py-1.5 rounded border text-xs hover:bg-gray-50">{showSummary ? 'Hide daily check' : 'Daily check'}</button>
         <button onClick={() => setShowRules((s) => !s)} className="px-3 py-1.5 rounded border text-xs hover:bg-gray-50">{showRules ? 'Hide guardrails' : 'Guardrails'}</button>
       </div>
@@ -147,6 +149,7 @@ export function Actions({ brandId, brandName }: Props) {
       {run?.notes && <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">{run.notes}</div>}
       {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">{error}</div>}
 
+      {showMix && <ChannelMix brandId={brandId} window={run?.eval_window_days ? `${run.eval_window_days}d` : '7d'} />}
       {showSummary && <DailyCheck brandId={brandId} />}
       {showRules && (
         <RulesPanel
@@ -362,6 +365,65 @@ function DailyCheck({ brandId }: { brandId: number }) {
           </tbody>
         </table>
       )}
+    </div>
+  );
+}
+
+function ChannelMix({ brandId, window }: { brandId: number; window: string }) {
+  const [data, setData] = useState<Awaited<ReturnType<typeof api.recommendationMix>> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => { void (async () => { try { setData(await api.recommendationMix(brandId, window)); } catch (e) { setError(e instanceof Error ? e.message : 'Failed'); } })(); }, [brandId, window]);
+  if (error) return <div className="bg-white border rounded-lg p-4 text-xs text-red-600">{error}</div>;
+  if (!data) return <div className="bg-white border rounded-lg p-4 text-xs text-gray-400">Loading channel mix…</div>;
+  const mix = data.mix;
+  if (!mix || mix.channels.length === 0) return <div className="bg-white border rounded-lg p-4 text-xs text-gray-500">No channel snapshots yet — run the recommender first.</div>;
+  const sorted = [...mix.channels].sort((a, b) => b.current_share - a.current_share);
+  const anyHalo = sorted.some((c) => Math.abs(c.halo_bonus) > 1e-6);
+  return (
+    <div className="bg-white border rounded-lg p-4 overflow-x-auto">
+      <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1 mb-2">
+        <h3 className="font-semibold text-sm">Channel mix (last {data.run_window_days}d)</h3>
+        <span className="text-xs text-gray-500">Daily spend ₹{Math.round(mix.total_daily_spend).toLocaleString('en-IN')} · blended direct ROAS {mix.current_blended_direct_roas.toFixed(2)}x → projected {mix.projected_blended_direct_roas.toFixed(2)}x</span>
+        {!anyHalo && <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">halo = 0 (pure direct ROAS)</span>}
+      </div>
+      {mix.notes?.length ? <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5 mb-2">{mix.notes.join(' ')}</div> : null}
+      <table className="w-full text-xs border-collapse">
+        <thead>
+          <tr className="text-gray-500 text-left border-b">
+            <th className="py-1.5 px-2">Channel</th>
+            <th className="px-2 text-right">Current</th>
+            <th className="px-2 text-right">₹/day</th>
+            <th className="px-2 text-right">Direct ROAS</th>
+            {anyHalo && <th className="px-2 text-right">Halo</th>}
+            {anyHalo && <th className="px-2 text-right">Effective</th>}
+            <th className="px-2 text-right">Marg. ROAS</th>
+            <th className="px-2 text-right">Recommended</th>
+            <th className="px-2 text-right">Δ share</th>
+            <th className="px-2 text-right">Δ ₹/day</th>
+            <th className="px-2">Why</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((c) => (
+            <tr key={c.channel} className="border-b last:border-0">
+              <td className="py-1.5 px-2 whitespace-nowrap">{c.channel}</td>
+              <td className="px-2 text-right tabular-nums">{(c.current_share * 100).toFixed(1)}%</td>
+              <td className="px-2 text-right tabular-nums">₹{Math.round(c.current_spend).toLocaleString('en-IN')}</td>
+              <td className="px-2 text-right tabular-nums">{c.direct_roas.toFixed(2)}x</td>
+              {anyHalo && <td className="px-2 text-right tabular-nums text-gray-500">+{(c.halo_bonus * 100).toFixed(0)}%</td>}
+              {anyHalo && <td className="px-2 text-right tabular-nums">{c.effective_roas.toFixed(2)}x</td>}
+              <td className="px-2 text-right tabular-nums">{c.marginal_effective_roas.toFixed(2)}x</td>
+              <td className="px-2 text-right tabular-nums font-medium">{(c.recommended_share * 100).toFixed(1)}%</td>
+              <td className={`px-2 text-right tabular-nums ${c.delta_share > 0.001 ? 'text-green-700' : c.delta_share < -0.001 ? 'text-red-600' : 'text-gray-400'}`}>{c.delta_share > 0 ? '+' : ''}{(c.delta_share * 100).toFixed(1)}pp</td>
+              <td className={`px-2 text-right tabular-nums ${c.delta_spend > 0.5 ? 'text-green-700' : c.delta_spend < -0.5 ? 'text-red-600' : 'text-gray-400'}`}>{c.delta_spend > 0 ? '+' : ''}₹{Math.round(c.delta_spend).toLocaleString('en-IN')}</td>
+              <td className="px-2 text-gray-600 max-w-[420px]">{c.rationale}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="text-[11px] text-gray-400 mt-2">
+        Score-proportional allocation: each channel's recommended share is set by its marginal effective ROAS, clamped to share floors/caps, capped at ±15% per run. Halo coefficients default to 0 (pure direct ROAS) — set per channel via Guardrails (kind=preference · metric=halo_bonus · channel=…) when you want top-funnel credit. Execution flows through the per-campaign approval list above.
+      </p>
     </div>
   );
 }
