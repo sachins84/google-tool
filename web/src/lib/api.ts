@@ -341,6 +341,7 @@ export interface Recommendation {
   mutate_action: string;
   bucket: string | null;
   user_action: string | null;
+  channel_type: string | null;
   comment_count: number;
   mutate_payload: Record<string, unknown>;
   current: Record<string, number> | null;

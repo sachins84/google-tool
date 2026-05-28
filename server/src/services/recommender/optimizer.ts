@@ -95,6 +95,11 @@ export interface SubEntityInput {
   roas_pre_rto: number;
   ad_strength?: string | null; // asset_group (PMax) only
   parentInLearning?: boolean;
+  /** Parent-campaign channel type — used purely so the optimizer can stamp it on
+   *  the emitted action for the UI's channel grouping. */
+  parent_channel_type?: string | null;
+  /** Funnel-aware per-(level, channel) floor resolved by the runner. */
+  floorOverride?: number | null;
 }
 
 /** Coarse action bucket for filtering + the daily suggestions-vs-actions check. */
@@ -175,6 +180,8 @@ export interface CandidateAction {
   reason_codes: string[];
   /** Plain-English diagnosis of the funnel bottleneck behind this action. */
   diagnosis?: string;
+  /** Channel of this entity (campaign's own, or parent's for sub-entities). */
+  channel_type?: string | null;
 }
 
 export interface OptimizerResult {
@@ -412,18 +419,23 @@ export function optimizePortfolio(input: PortfolioInput): OptimizerResult {
     if (s.parentInLearning) continue;
     const conf = clamp(0, 1, cfg.minDataConv > 0 ? s.conversions / cfg.minDataConv : 1);
     if (conf < 1) continue;
+    // Per-(level, parent-channel) floor — set by the runner from scoped rules,
+    // so a Video ad isn't held to a Search ad's threshold.
+    const floorAd = s.floorOverride ?? cfg.floors.ad;
+    const floorKw = s.floorOverride ?? cfg.floors.keyword;
+    const floorAg = s.floorOverride ?? cfg.floors.asset_group;
     if (s.level === 'asset_group') {
-      const weak = (s.ad_strength === 'POOR' || s.ad_strength === 'AVERAGE') && s.roas_pre_rto < cfg.floors.asset_group;
+      const weak = (s.ad_strength === 'POOR' || s.ad_strength === 'AVERAGE') && s.roas_pre_rto < floorAg;
       if (!weak || !s.asset_group_id) continue;
-      actions.push(subPause('asset_group', s, conf, cfg.floors.asset_group, 'PAUSE_ASSET_GROUP',
+      actions.push(subPause('asset_group', s, conf, floorAg, 'PAUSE_ASSET_GROUP',
         { action: 'pause', level: 'asset_group', asset_group_id: s.asset_group_id }));
     } else if (s.level === 'keyword') {
-      if (s.roas_pre_rto >= cfg.floors.keyword || !s.ad_group_id || !s.criterion_id) continue;
-      actions.push(subPause('keyword', s, conf, cfg.floors.keyword, 'EXCLUDE_KW',
+      if (s.roas_pre_rto >= floorKw || !s.ad_group_id || !s.criterion_id) continue;
+      actions.push(subPause('keyword', s, conf, floorKw, 'EXCLUDE_KW',
         { action: 'pause', level: 'keyword', ad_group_id: s.ad_group_id, criterion_id: s.criterion_id }));
     } else if (s.level === 'ad') {
-      if (s.roas_pre_rto >= cfg.floors.ad || !s.ad_group_id || !s.ad_id) continue;
-      actions.push(subPause('ad', s, conf, cfg.floors.ad, 'PAUSE_POOR_AD',
+      if (s.roas_pre_rto >= floorAd || !s.ad_group_id || !s.ad_id) continue;
+      actions.push(subPause('ad', s, conf, floorAd, 'PAUSE_POOR_AD',
         { action: 'pause', level: 'ad', ad_group_id: s.ad_group_id, ad_id: s.ad_id }));
     }
   }
@@ -466,6 +478,7 @@ function subPause(
     expected_impact: { delta_value: 0, delta_cost: 0 },
     hard_constraints: [`floor.${level}=${floor}`],
     reason_codes: [reason],
+    channel_type: s.parent_channel_type ?? null,
   };
 }
 

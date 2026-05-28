@@ -27,6 +27,14 @@ const BUCKET_ORDER = ['scale_up', 'scale_down', 'pause', 'exclude', 'tighten', '
 const pf = (n: number | null | undefined): string => (n == null ? '—' : `${(n * 100).toFixed(1)}%`);
 const LEVELS = ['campaign', 'ad_group', 'asset_group', 'ad', 'keyword'];
 const WINDOW_PRESETS = [7, 14, 30];
+// Channel display order — bottom-funnel first (most operators read top→bottom).
+const CHANNEL_ORDER = ['SEARCH', 'SHOPPING', 'PERFORMANCE_MAX', 'DEMAND_GEN', 'VIDEO', 'DISPLAY', 'DISCOVERY'];
+const CHANNEL_LABEL: Record<string, string> = {
+  SEARCH: 'Search', SHOPPING: 'Shopping', PERFORMANCE_MAX: 'Performance Max',
+  DEMAND_GEN: 'Demand Gen', VIDEO: 'Video', DISPLAY: 'Display', DISCOVERY: 'Discovery',
+};
+const channelLabel = (c: string | null | undefined): string => (c ? CHANNEL_LABEL[c] ?? c : 'Other / unknown');
+const bucketRank = (b: string | null): number => { const i = BUCKET_ORDER.indexOf(b ?? 'hold'); return i < 0 ? BUCKET_ORDER.length : i; };
 
 export function Actions({ brandId, brandName }: Props) {
   const [data, setData] = useState<RecommendationsResponse | null>(null);
@@ -104,6 +112,25 @@ export function Actions({ brandId, brandName }: Props) {
     (r) => (levelFilter === 'all' || r.level === levelFilter) && (bucketFilter === 'all' || r.bucket === bucketFilter)
   );
   const diffByKey = new Map((data?.diff ?? []).map((d) => [d.key, d]));
+
+  // Group rows by channel_type then sort within each channel by bucket order then score.
+  const grouped: Array<[string, Recommendation[]]> = (() => {
+    const m = new Map<string, Recommendation[]>();
+    for (const r of list) {
+      const ch = r.channel_type ?? 'Other';
+      if (!m.has(ch)) m.set(ch, []);
+      m.get(ch)!.push(r);
+    }
+    const orderOf = (ch: string) => { const i = CHANNEL_ORDER.indexOf(ch); return i < 0 ? CHANNEL_ORDER.length + 1 : i; };
+    return [...m.entries()]
+      .map(([ch, rs]) => [ch, [...rs].sort((a, b) => bucketRank(a.bucket) - bucketRank(b.bucket) || b.score - a.score)] as [string, Recommendation[]])
+      .sort((a, b) => orderOf(a[0]) - orderOf(b[0]));
+  })();
+  const bucketBreakdown = (rs: Recommendation[]): Array<{ key: string; n: number }> => {
+    const c: Record<string, number> = {};
+    for (const r of rs) { const k = r.bucket ?? 'hold'; c[k] = (c[k] ?? 0) + 1; }
+    return BUCKET_ORDER.filter((b) => c[b]).map((b) => ({ key: b, n: c[b]! }));
+  };
 
   return (
     <div className="space-y-4">
@@ -200,6 +227,7 @@ export function Actions({ brandId, brandName }: Props) {
                 <th className="text-left font-medium py-2 px-2">Level</th>
                 <th className="text-left font-medium py-2 px-2">Entity</th>
                 <th className="text-left font-medium py-2 px-2">Action</th>
+                <th className="text-left font-medium py-2 px-2">Why</th>
                 <th className="text-right font-medium py-2 px-2">Change</th>
                 <th className="text-right font-medium py-2 px-2">ROAS</th>
                 <th className="text-right font-medium py-2 px-2">CTR</th>
@@ -211,7 +239,20 @@ export function Actions({ brandId, brandName }: Props) {
               </tr>
             </thead>
             <tbody>
-              {list.map((rec) => {
+              {grouped.map(([ch, recs]) => (
+                <Fragment key={`ch-${ch}`}>
+                  <tr className="bg-gray-100 border-y">
+                    <td colSpan={14} className="px-3 py-1.5 text-xs">
+                      <span className="font-semibold text-gray-800">{channelLabel(ch)}</span>
+                      <span className="text-gray-400 font-normal"> · {recs.length} recommendation{recs.length === 1 ? '' : 's'}</span>
+                      <span className="ml-3 inline-flex gap-1 flex-wrap">
+                        {bucketBreakdown(recs).map((b) => (
+                          <span key={b.key} className={`text-[10px] px-1.5 py-0.5 rounded-full ${bucketActive(b.key)}`}>{BUCKET_LABEL[b.key]} {b.n}</span>
+                        ))}
+                      </span>
+                    </td>
+                  </tr>
+                  {recs.map((rec) => {
                 const reason = rec.reason_codes?.[0] ?? '';
                 const isMonitor = rec.mutate_action === 'monitor';
                 const pending = rec.status === 'pending';
@@ -231,6 +272,11 @@ export function Actions({ brandId, brandName }: Props) {
                       <td className="px-2 py-2 text-gray-500 whitespace-nowrap">{rec.level}</td>
                       <td className="px-2 py-2 max-w-[220px]"><span className="block truncate font-medium" title={rec.entity_name ?? rec.entity_id}>{rec.entity_name ?? rec.entity_id}</span></td>
                       <td className="px-2 py-2 whitespace-nowrap">{ACTION_LABEL[rec.mutate_action] ?? rec.mutate_action}</td>
+                      <td className="px-2 py-2 max-w-[280px]">
+                        <span className="block truncate text-xs text-gray-600" title={[rec.rationale, rec.diagnosis].filter(Boolean).join(' • ')}>
+                          {rec.rationale ?? '—'}
+                        </span>
+                      </td>
                       <td className="px-2 py-2 text-right whitespace-nowrap tabular-nums">{changeText(rec)}</td>
                       <td className="px-2 py-2 text-right tabular-nums">{x(roas)}</td>
                       <td className="px-2 py-2 text-right tabular-nums text-gray-600">{rec.current?.ctr ? pf(rec.current.ctr) : '—'}</td>
@@ -264,7 +310,7 @@ export function Actions({ brandId, brandName }: Props) {
                     {open && (
                       <tr className="border-b last:border-0 bg-gray-50/60">
                         <td></td>
-                        <td colSpan={12} className="px-2 py-2">
+                        <td colSpan={13} className="px-2 py-2">
                           <div className="text-sm text-gray-700 mb-1">{rec.rationale}</div>
                           {rec.diagnosis && <div className="text-xs text-indigo-700 mb-1">🔎 {rec.diagnosis}</div>}
                           {rec.current && (rec.current.cpc || rec.current.cpm || rec.current.cvr || rec.current.lost_is_budget || rec.current.lost_is_rank) ? (
@@ -289,6 +335,8 @@ export function Actions({ brandId, brandName }: Props) {
                   </Fragment>
                 );
               })}
+                </Fragment>
+              ))}
             </tbody>
           </table>
         </div>

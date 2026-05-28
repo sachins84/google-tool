@@ -392,6 +392,7 @@ export function initDatabase(): Database.Database {
   try { db.exec("ALTER TABLE recommendations ADD COLUMN bucket TEXT"); } catch { /* exists */ }
   try { db.exec("ALTER TABLE recommendations ADD COLUMN user_action TEXT"); } catch { /* exists */ }
   try { db.exec("ALTER TABLE recommendations ADD COLUMN diagnosis TEXT"); } catch { /* exists */ }
+  try { db.exec("ALTER TABLE recommendations ADD COLUMN channel_type TEXT"); } catch { /* exists */ }
   try { db.exec("ALTER TABLE recommendation_runs ADD COLUMN eval_window_days INTEGER"); } catch { /* exists */ }
 
   // Idempotent column adds — safe for already-initialised DBs
@@ -458,6 +459,22 @@ function seedDefaultRules(database: Database.Database): void {
     ['floor', 'campaign', 'roas_post_rto', 'PERFORMANCE_MAX', 1.2, 1],
     ['floor', 'campaign', 'roas_post_rto', 'DEMAND_GEN',      0.7, 1],
     ['floor', 'campaign', 'roas_post_rto', 'VIDEO',           0.5, 1],
+    // Sub-entity floors — same funnel-aware shape one level down. Resolved by
+    // parent-campaign channel so a Video ad doesn't get judged against a Search
+    // ad's threshold. ~70% of the campaign floor as a rough rule of thumb (an ad
+    // can underperform its campaign average and still be the best of its set).
+    ['floor', 'ad', 'roas_post_rto', 'SEARCH',          2.0, 1],
+    ['floor', 'ad', 'roas_post_rto', 'SHOPPING',        1.5, 1],
+    ['floor', 'ad', 'roas_post_rto', 'PERFORMANCE_MAX', 1.0, 1],
+    ['floor', 'ad', 'roas_post_rto', 'DEMAND_GEN',      0.5, 1],
+    ['floor', 'ad', 'roas_post_rto', 'VIDEO',           0.3, 1],
+    ['floor', 'keyword', 'roas_post_rto', 'SEARCH',          2.0, 1],
+    ['floor', 'keyword', 'roas_post_rto', 'SHOPPING',        1.5, 1],
+    ['floor', 'keyword', 'roas_post_rto', 'PERFORMANCE_MAX', 1.0, 1],
+    ['floor', 'keyword', 'roas_post_rto', 'DEMAND_GEN',      0.5, 1],
+    ['floor', 'keyword', 'roas_post_rto', 'VIDEO',           0.3, 1],
+    // asset_group lives in PMax only; one explicit floor.
+    ['floor', 'asset_group', 'roas_post_rto', 'PERFORMANCE_MAX', 1.2, 1],
   ];
 
   for (const b of brands) {

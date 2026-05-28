@@ -83,6 +83,25 @@ function loadScopedRules(brandId: number): ScopedRule[] {
 }
 
 /**
+ * Resolve a sub-entity ROAS floor by (level, parent-channel) precedence:
+ *   channel-specific rule at that level (2) > generic rule at that level (1).
+ */
+function resolveSubEntityFloor(rules: ScopedRule[], level: 'ad' | 'keyword' | 'asset_group', channel: string | undefined | null): number | null {
+  const precedence = (r: ScopedRule): number => {
+    if (r.scope_level !== level || r.metric !== 'roas_post_rto' || r.kind !== 'floor') return -1;
+    if (r.channel && r.channel !== 'ALL' && r.channel === channel) return 2;
+    if (!r.channel || r.channel === 'ALL') return 1;
+    return -1;
+  };
+  let best: number | null = null, bestP = 0;
+  for (const r of rules) {
+    const p = precedence(r);
+    if (p > bestP) { bestP = p; best = r.value; }
+  }
+  return best;
+}
+
+/**
  * Resolve a campaign's effective guardrails by precedence:
  *   specific-campaign (3) > campaign-type/channel (2) > generic campaign rule (1).
  */
@@ -181,18 +200,18 @@ function writeSnapshots(brandId: number, today: string, window: string, level: s
   tx(rows);
 }
 
-function persistRecommendation(runId: number, brandId: number, source: 'rules' | 'engine', a: CandidateAction, score: number, rationale: string): void {
+function persistRecommendation(runId: number, brandId: number, source: 'rules' | 'engine', a: CandidateAction, score: number, rationale: string, channelType: string | null): void {
   const bucket = bucketForReason(a.reason_codes[0] ?? '');
   getDb()
     .prepare(
       `INSERT INTO recommendations
-        (run_id, brand_id, source, level, customer_id, entity_id, entity_name, mutate_action, bucket,
+        (run_id, brand_id, source, level, customer_id, entity_id, entity_name, mutate_action, bucket, channel_type,
          mutate_payload_json, current_json, proposed_json, score, confidence,
          expected_impact_json, hard_constraints_json, reason_codes_json, rationale, diagnosis, status)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'pending')`
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'pending')`
     )
     .run(
-      runId, brandId, source, a.level, a.customer_id, a.entity_id, a.entity_name, a.mutate_action, bucket,
+      runId, brandId, source, a.level, a.customer_id, a.entity_id, a.entity_name, a.mutate_action, bucket, channelType,
       JSON.stringify(a.mutate_payload), JSON.stringify(a.current), JSON.stringify(a.proposed),
       score, a.confidence, JSON.stringify(a.expected_impact), JSON.stringify(a.hard_constraints),
       JSON.stringify(a.reason_codes), rationale, a.diagnosis ?? null
@@ -262,6 +281,7 @@ async function runBrand(runId: number, brandId: number, windowDays: number): Pro
   for (const r of c30) if (r.campaign_id) roas30.set(`${r.customer_id}|${r.campaign_id}`, campaignValue(r.metrics).roas);
   const roas7 = new Map<string, number>();
   const rtoRatio = new Map<string, number>(); // campaign_id → post/pre RTO ratio (for sub-entity proxy)
+  const campChannel = new Map<string, string>(); // campaign_id → channel_type (for sub-entity scoping + UI grouping)
 
   const campaigns: CampaignInput[] = c7
     .filter((r) => r.campaign_id && !r.synthetic)
@@ -271,6 +291,7 @@ async function runBrand(runId: number, brandId: number, windowDays: number): Pro
       roas7.set(key, roas);
       const ratio = r.metrics.roas_pre_rto > 0 ? Math.min(1, r.metrics.roas_post_rto / r.metrics.roas_pre_rto) : 1;
       rtoRatio.set(r.campaign_id as string, ratio);
+      if (r.channel_type) campChannel.set(r.campaign_id as string, r.channel_type);
       const ov = resolveOverrides(scopedRules, { campaign_id: r.campaign_id as string, channel_type: r.channel_type });
       return {
         customer_id: r.customer_id,
@@ -312,6 +333,8 @@ async function runBrand(runId: number, brandId: number, windowDays: number): Pro
       if (r.synthetic) continue;
       const parent = r.campaign_id ?? '';
       const ratio = rtoRatio.get(parent) ?? 1;
+      const parentChannel = campChannel.get(parent) ?? null;
+      const subFloor = level === 'ad_group' ? null : resolveSubEntityFloor(scopedRules, level as 'ad' | 'keyword' | 'asset_group', parentChannel);
       subEntities.push({
         level,
         customer_id: r.customer_id,
@@ -327,6 +350,8 @@ async function runBrand(runId: number, brandId: number, windowDays: number): Pro
         roas_pre_rto: r.metrics.roas_pre_rto * ratio,
         ad_strength: r.ad_strength ?? null,
         parentInLearning: learning.has(parent),
+        parent_channel_type: parentChannel,
+        floorOverride: subFloor,
       });
     }
   };
@@ -339,9 +364,12 @@ async function runBrand(runId: number, brandId: number, windowDays: number): Pro
   const tx = getDb().transaction(() => {
     for (const a of result.actions) {
       const rationale = buildRationale(a, portfolioTarget);
-      persistRecommendation(runId, brandId, 'rules', a, a.baseScore, rationale);
+      // Stamp channel_type: sub-entity actions carry parent's channel via subPause;
+      // campaign-level actions look up their own channel from the runner's map.
+      const channelType = a.channel_type ?? (a.level === 'campaign' ? (campChannel.get(a.entity_id) ?? null) : null);
+      persistRecommendation(runId, brandId, 'rules', a, a.baseScore, rationale, channelType);
       const mult = engineMultiplier(brandId, a.reason_codes[0] ?? '');
-      persistRecommendation(runId, brandId, 'engine', a, a.baseScore * mult, rationale);
+      persistRecommendation(runId, brandId, 'engine', a, a.baseScore * mult, rationale, channelType);
     }
     getDb()
       .prepare(

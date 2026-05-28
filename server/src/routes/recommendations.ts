@@ -11,7 +11,7 @@ import { config } from '../config.js';
 interface RecRow {
   id: number; run_id: number; brand_id: number; source: string; level: string;
   customer_id: string; entity_id: string; entity_name: string | null; mutate_action: string;
-  bucket: string | null; user_action: string | null;
+  bucket: string | null; user_action: string | null; channel_type: string | null;
   mutate_payload_json: string; current_json: string | null; proposed_json: string | null;
   score: number; confidence: number; expected_impact_json: string | null;
   hard_constraints_json: string | null; reason_codes_json: string | null; rationale: string | null;
@@ -24,7 +24,7 @@ function shape(r: RecRow, commentCount = 0): Record<string, unknown> {
   return {
     id: r.id, run_id: r.run_id, source: r.source, level: r.level, customer_id: r.customer_id,
     entity_id: r.entity_id, entity_name: r.entity_name, mutate_action: r.mutate_action,
-    bucket: r.bucket, user_action: r.user_action,
+    bucket: r.bucket, user_action: r.user_action, channel_type: r.channel_type,
     mutate_payload: parse(r.mutate_payload_json), current: parse(r.current_json), proposed: parse(r.proposed_json),
     score: r.score, confidence: r.confidence, expected_impact: parse(r.expected_impact_json),
     hard_constraints: parse(r.hard_constraints_json), reason_codes: parse(r.reason_codes_json),
