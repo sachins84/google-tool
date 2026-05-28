@@ -27,21 +27,21 @@ In production, the server serves the built web bundle from a single port.
 
 ## YouTube Uploader
 
-The "YT Upload" tab uploads Drive videos to YouTube (unlisted by default) from a Google Sheet, so they can be used as creative for Google Ads video campaigns.
+The "YT Upload" tab uploads Drive videos to YouTube (unlisted by default) from a Google Sheet, so they can be used as creative for Google Ads video campaigns. Channels are connected per-brand through an in-app Google consent flow.
+
+See [docs/youtube-uploader.md](docs/youtube-uploader.md) for the full guide.
 
 ### Setup (one-time)
 
 1. In your GCP project enable: **YouTube Data API v3**, **Drive API**, **Sheets API**.
-2. Create an OAuth client (type *Web application*) with redirect `http://localhost:8765/callback`.
-3. Paste client id/secret into `.env` as `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET`.
-4. For each YouTube channel you want to upload to, run:
-   ```bash
-   yarn workspace @google-ads-tool/server tsx scripts/yt-oauth.ts
-   ```
-   Sign in with the Google account that owns/manages the channel, pick the brand channel on the consent screen. Paste the printed token into `.env`:
-   - `YT_REFRESH_TOKEN=...` for the default channel
-   - `YT_REFRESH_TOKEN_MANMATTERS=...` for a named channel (key = `manmatters`)
-5. Restart the server.
+2. Create an OAuth client (type *Web application*). Add redirect `<PUBLIC_BASE_URL>/api/youtube/auth/callback` for the web flow (and `http://localhost:8765/callback` if you also use the CLI helper).
+3. In `.env` set `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `PUBLIC_BASE_URL`, and `OAUTH_STATE_SECRET` (a random 32+ byte hex string, e.g. `openssl rand -hex 32`), then restart the server.
+
+### Connect a channel
+
+Open the **YT Channels** tab, pick a brand, and click **Connect channel via Google** — sign in as a `@mosaicwellness.in` admin and select the Brand Account/channel on the consent screen. Tokens are stored in the DB, scoped to the brand. Repeat per channel.
+
+> Legacy alternative: mint a refresh token with `yarn workspace @google-ads-tool/server tsx scripts/yt-oauth.ts` and paste it into `.env` as `YT_REFRESH_TOKEN=...` (default channel) or `YT_REFRESH_TOKEN_<NAME>=...` (named channel, key lowercased). Env channels still work and appear tagged `(env)`.
 
 ### Sheet format
 

@@ -56,6 +56,7 @@ Daily in-process pipeline for each brand. No external AI; everything runs in `se
 - Orchestrator pattern in `services/youtube/` — a `youtube_jobs` row spawns `youtube_job_rows`, processed by a fire-and-forget background loop. Uses YouTube's **resumable upload** with 8 MiB chunks streamed directly from Drive (no buffering); retries on 5xx/network.
 - Multi-channel via env: `YT_REFRESH_TOKEN` → key `"default"`, `YT_REFRESH_TOKEN_<SUFFIX>` → key `suffix.toLowerCase()`. `getYoutubeChannels()` in `config.ts` discovers them dynamically — to add a channel, just set the env var and restart.
 - Refresh tokens are obtained via `server/scripts/yt-oauth.ts` (interactive: opens browser, listens on `localhost:8765/callback`). This uses **standard Google OAuth**, not the AdYogi proxy — uses `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET`.
+- Preferred path is the **in-app web consent flow** (`routes/youtube-auth.ts`, `services/youtube/{channels,oauth-state}.ts`): brand-scoped tokens stored in `youtube_channel_auth`, keyed `yt:<channel_id>`. Needs `PUBLIC_BASE_URL` + `OAUTH_STATE_SECRET` in `.env`; callback is mounted public (Google is the caller, signed `state` is the CSRF proof). `listConfiguredChannels()` merges DB + env channels. See `docs/youtube-uploader.md`.
 
 ### MCP server
 `server/src/routes/mcp.ts` exposes the read-only side of the tool over MCP at `/mcp` (mounted **outside** `/api/*` so the session-cookie auth middleware doesn't block it). Token-gated via `MCP_SECRET` if set.
