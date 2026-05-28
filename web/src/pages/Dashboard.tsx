@@ -6,6 +6,7 @@ import { Audit } from './Audit';
 import { Insights } from './Insights';
 import { Actions } from './Actions';
 import { YoutubeUploader } from './YoutubeUploader';
+import { YoutubeAuth } from './YoutubeAuth';
 import { api } from '../lib/api';
 
 interface Props {
@@ -13,8 +14,17 @@ interface Props {
   onLogout: () => void;
 }
 
+function initialView(): View {
+  if (typeof window === 'undefined') return 'performance';
+  const u = new URL(window.location.href);
+  if (u.searchParams.has('yt_auth_connected') || u.searchParams.has('yt_auth_error')) {
+    return 'youtube_auth';
+  }
+  return 'performance';
+}
+
 export function Dashboard({ username, onLogout }: Props) {
-  const [view, setView] = useState<View>('performance');
+  const [view, setView] = useState<View>(initialView);
   const [state, setState] = useState<DashState>({
     brandId: null,
     from: '',
@@ -62,6 +72,8 @@ export function Dashboard({ username, onLogout }: Props) {
           <Audit />
         ) : view === 'youtube' ? (
           <YoutubeUploader />
+        ) : view === 'youtube_auth' ? (
+          <YoutubeAuth />
         ) : view === 'actions' ? (
           state.brandId ? (
             <Actions

@@ -105,11 +105,8 @@ export function YoutubeUploader() {
 
         {!channels.length && (
           <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
-            No YouTube channels configured. Add{' '}
-            <code className="bg-amber-100 px-1 rounded">YT_REFRESH_TOKEN</code> (or
-            <code className="bg-amber-100 px-1 rounded">YT_REFRESH_TOKEN_&lt;CHANNEL&gt;</code>)
-            plus <code className="bg-amber-100 px-1 rounded">GOOGLE_OAUTH_CLIENT_ID/SECRET</code> to your
-            server .env, then restart. See <code>server/scripts/yt-oauth.ts</code>.
+            No YouTube channels connected yet. Open the{' '}
+            <strong>YT Channels</strong> tab to connect one via Google OAuth.
           </div>
         )}
 
@@ -124,7 +121,9 @@ export function YoutubeUploader() {
               {!channels.length && <option value="">No channels</option>}
               {channels.map((c) => (
                 <option key={c.key} value={c.key}>
-                  {c.title ?? c.label} ({c.key})
+                  {c.title ?? c.label}
+                  {c.brandName ? ` — ${c.brandName}` : ''}
+                  {c.source === 'env' ? ' (env)' : ''}
                 </option>
               ))}
             </select>

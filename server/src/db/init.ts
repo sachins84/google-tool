@@ -254,6 +254,28 @@ export function initDatabase(): Database.Database {
       fetched_at INTEGER
     );
 
+    -- Per-(brand, YouTube channel) OAuth refresh token, written by the
+    -- web consent flow. One row = one Brand Account selected during consent.
+    -- N channels per brand = N rows = N consent flows.
+    CREATE TABLE IF NOT EXISTS youtube_channel_auth (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      brand_id INTEGER NOT NULL,
+      channel_id TEXT NOT NULL,
+      channel_title TEXT NOT NULL,
+      channel_thumbnail TEXT,
+      refresh_token TEXT NOT NULL,
+      scopes TEXT NOT NULL,
+      granted_by_email TEXT NOT NULL,
+      granted_at INTEGER NOT NULL,
+      last_used_at INTEGER,
+      last_refresh_error TEXT,
+      revoked_at INTEGER,
+      UNIQUE (brand_id, channel_id),
+      FOREIGN KEY (brand_id) REFERENCES brands(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_yt_auth_brand ON youtube_channel_auth(brand_id);
+    CREATE INDEX IF NOT EXISTS idx_yt_auth_channel ON youtube_channel_auth(channel_id) WHERE revoked_at IS NULL;
+
     -- ════════════════════════════════════════════════════════════════════
     -- Recommender system (portfolio = brand). All in-process, no external AI.
     -- ════════════════════════════════════════════════════════════════════

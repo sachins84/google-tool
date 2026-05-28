@@ -3,13 +3,17 @@ export interface ApiError {
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  // Only advertise a JSON content-type when we actually send a body. Bodyless
+  // GET/DELETE calls with Content-Type: application/json make Fastify's JSON
+  // parser reject them (FST_ERR_CTP_EMPTY_JSON_BODY).
+  const headers: Record<string, string> = { ...(init.headers as Record<string, string> | undefined) };
+  if (init.body != null && headers['Content-Type'] == null) {
+    headers['Content-Type'] = 'application/json';
+  }
   const res = await fetch(path, {
     credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init.headers || {}),
-    },
     ...init,
+    headers,
   });
   if (!res.ok) {
     let message = res.statusText;
@@ -266,6 +270,16 @@ export const api = {
   ytJob: (id: number) =>
     request<{ job: YoutubeJob; rows: YoutubeJobRow[] }>(`/api/youtube/jobs/${id}`),
 
+  // ── YouTube OAuth (per-brand, multi-channel) ─────────────────────────
+  ytAuthStart: (brandId: number) =>
+    request<{ url: string; brand: { id: number; name: string } }>(
+      `/api/youtube/auth/start?brand_id=${brandId}`
+    ),
+  ytAuthChannels: () =>
+    request<{ channels: YoutubeAuthChannel[] }>('/api/youtube/auth/channels'),
+  ytAuthDisconnect: (id: number) =>
+    request<{ ok: true }>(`/api/youtube/auth/channels/${id}`, { method: 'DELETE' }),
+
   // ── Recommender ──────────────────────────────────────────────────────
   recommendations: (brandId: number, runDate?: string) => {
     const qs = new URLSearchParams({ brand_id: String(brandId) });
@@ -401,9 +415,29 @@ export interface RulePayload {
 export interface YoutubeChannel {
   key: string;
   label: string;
+  source: 'db' | 'env';
   channelId?: string;
   title?: string;
   thumbnail?: string;
+  brandId?: number;
+  brandName?: string;
+  grantedByEmail?: string;
+  grantedAt?: number;
+  lastUsedAt?: number;
+  lastRefreshError?: string | null;
+}
+
+export interface YoutubeAuthChannel {
+  id: number;
+  brand_id: number;
+  brand_name: string | null;
+  channel_id: string;
+  channel_title: string;
+  channel_thumbnail: string | null;
+  granted_by_email: string;
+  granted_at: number;
+  last_used_at: number | null;
+  last_refresh_error: string | null;
 }
 
 export interface YoutubeJob {

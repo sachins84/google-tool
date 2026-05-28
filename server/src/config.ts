@@ -32,10 +32,18 @@ const schema = z.object({
   GOOGLE_OAUTH_CLIENT_ID: z.string().optional(),
   GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional(),
   // Single-channel shortcut. Multi-channel uses YT_REFRESH_TOKEN_<KEY>=... pattern,
-  // picked up dynamically by getYoutubeChannels() below.
+  // picked up dynamically by getYoutubeChannels() below. Both are legacy env-based
+  // sources; the web consent flow stores refresh tokens in youtube_channel_auth.
   YT_REFRESH_TOKEN: z.string().optional(),
   // Optional override for default-channel display label
   YT_DEFAULT_CHANNEL_LABEL: z.string().optional(),
+  // Base URL used to build the OAuth redirect_uri. Must exactly match an
+  // Authorized Redirect URI registered on the OAuth client in GCP Console
+  // (e.g. https://tool.mosaicwellness.in). No trailing slash.
+  PUBLIC_BASE_URL: z.string().url().optional(),
+  // HMAC secret for the OAuth `state` param (CSRF protection + brand_id transport).
+  // Required only when the web consent flow is used.
+  OAUTH_STATE_SECRET: z.string().min(16).optional(),
 
   // ── Recommender system ──────────────────────────────────────────────
   // Master switch for the daily scheduler. Routes work regardless; this only

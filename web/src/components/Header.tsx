@@ -10,7 +10,7 @@ export interface DashState {
   compareTo?: string;
 }
 
-export type View = 'performance' | 'insights' | 'actions' | 'settings' | 'audit' | 'youtube';
+export type View = 'performance' | 'insights' | 'actions' | 'settings' | 'audit' | 'youtube' | 'youtube_auth';
 
 interface Props {
   username: string;
@@ -145,6 +145,12 @@ export function Header({ username, view, state, brands, onState, onView, onLogou
             className={`px-3 py-1.5 rounded ${view === 'youtube' ? 'bg-black text-white' : 'hover:bg-gray-100'}`}
           >
             YT Upload
+          </button>
+          <button
+            onClick={() => onView('youtube_auth')}
+            className={`px-3 py-1.5 rounded ${view === 'youtube_auth' ? 'bg-black text-white' : 'hover:bg-gray-100'}`}
+          >
+            YT Channels
           </button>
           <button
             onClick={() => onView('audit')}

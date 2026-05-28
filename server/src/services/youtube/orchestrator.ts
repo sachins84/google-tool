@@ -1,5 +1,5 @@
 import { getDb } from '../../db/init.js';
-import { getChannelConfig } from './channels.js';
+import { getChannelConfig, markChannelRefreshError } from './channels.js';
 import { readAndPrepareSheet, writeRowResult, type SheetSchema } from './sheets.js';
 import { getDriveFileInfo, parseDriveFileId } from './drive.js';
 import { uploadDriveFileToYouTube } from './upload.js';
@@ -49,7 +49,7 @@ export interface JobRow {
 const now = (): number => Math.floor(Date.now() / 1000);
 
 export async function startJob(input: StartJobInput): Promise<JobSummary> {
-  const cfg = getChannelConfig(input.channelKey);
+  const cfg = await getChannelConfig(input.channelKey);
   if (!cfg) throw new Error(`Unknown YouTube channel key: ${input.channelKey}`);
 
   const db = getDb();
@@ -76,6 +76,9 @@ export async function startJob(input: StartJobInput): Promise<JobSummary> {
     getDb()
       .prepare(`UPDATE youtube_jobs SET status='failed', error=?, finished_at=? WHERE id = ?`)
       .run(msg, now(), jobId);
+    // If Google rejected the refresh token, surface it on the YT Channels page
+    // so an admin knows to reconnect that channel.
+    if (msg.includes('invalid_grant')) markChannelRefreshError(cfg.key, msg);
   });
 
   return getJob(jobId)!;
