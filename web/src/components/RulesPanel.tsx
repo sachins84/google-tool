@@ -3,6 +3,8 @@ import { api, type Rule } from '../lib/api';
 
 interface Props {
   brandId: number;
+  /** Campaigns from the latest run, for the upcoming specific-campaign scope picker (WIP). */
+  campaigns?: Array<{ id: string; name: string }>;
 }
 
 const SCOPES = ['portfolio', 'campaign', 'asset_group', 'keyword', 'ad'] as const;

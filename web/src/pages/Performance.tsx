@@ -145,6 +145,18 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
     [rows, filter, tab, isPmaxSearchInsights]
   );
 
+  // KPI tiles ignore the row-level status filter so the headline Spend reflects
+  // the TRUE total for the date range (incl. PAUSED) — the table's default
+  // "enabled-only" view was silently hiding paused-campaign spend from the
+  // headline. Channel + hide-zero-spend filters still apply.
+  const kpiRows = useMemo(
+    () => applyFilters(rows, { ...filter, status: 'all', searchTermStatus: 'all' }, {
+      isSearchTerms: tab === 'search_terms',
+      isPmaxSearchInsights,
+    }),
+    [rows, filter, tab, isPmaxSearchInsights]
+  );
+
   const hasCalcMetrics = useMemo(
     () => filteredRows.some((r) => r.metrics?.ncs != null),
     [filteredRows]
@@ -251,7 +263,7 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
       {!isCustomTab && (
         <>
           <KpiStrip
-            rows={filteredRows}
+            rows={kpiRows}
             hasCompare={hasCompare}
             brandTotals={tab === 'campaigns' ? brandTotals : undefined}
           />
