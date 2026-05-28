@@ -409,33 +409,67 @@ export function initDatabase(): Database.Database {
 }
 
 /**
- * Seed a baseline guardrail set for any brand that has none. Idempotent — only
- * inserts when a brand has zero rules, so manual edits are never clobbered.
- * These default rows ARE the OptimizerConfig: the portfolio target + per-level
- * ROAS floors + the per-run budget step cap. Floors/caps are is_hard=1 so the
- * feedback loop can never relax them.
+ * Seed a baseline guardrail set for every brand. Idempotent PER-RULE: we check
+ * for each expected default by (brand, kind, scope_level, metric, channel) and
+ * insert only the missing ones — so a brand that already has tuned rules keeps
+ * them, and existing brands automatically pick up new defaults we add over time
+ * (e.g. funnel-aware per-channel ROAS floors).
+ *
+ * These default rows ARE the OptimizerConfig: portfolio target + per-level
+ * floors + per-channel floors (precedence 2 in runner.resolveOverrides — they
+ * override the generic campaign floor) + per-run budget step cap. Floors/caps
+ * are is_hard=1 so the feedback loop can never relax them.
+ *
+ * Funnel-aware ROAS floors by campaign type (the headline of these defaults):
+ * - SEARCH          3.0x  bottom-funnel intent harvesting → high ROAS expected
+ * - SHOPPING        2.0x  mid-funnel product intent
+ * - PERFORMANCE_MAX 1.2x  mid-funnel mixed channels
+ * - DEMAND_GEN      0.7x  top-funnel demand creation → lower ROAS, fuels later conv
+ * - VIDEO           0.5x  top-funnel reach → lowest direct ROAS
+ * (Generic 2.0x stays as the fallback for any channel without an explicit floor.)
  */
 function seedDefaultRules(database: Database.Database): void {
   const brands = database.prepare('SELECT id FROM brands').all() as Array<{ id: number }>;
+  const exists = database.prepare(
+    `SELECT 1 FROM rules
+       WHERE brand_id = ? AND kind = ? AND scope_level = ?
+         AND COALESCE(json_extract(json, '$.metric'), '')      = ?
+         AND COALESCE(json_extract(json, '$.channel'), '')     = ?
+         AND COALESCE(json_extract(json, '$.campaign_id'), '') = ''
+       LIMIT 1`
+  );
   const insert = database.prepare(
     `INSERT INTO rules (brand_id, origin, kind, scope_level, json, weight, enabled, is_hard)
      VALUES (?, 'default', ?, ?, ?, 1.0, 1, ?)`
   );
+
+  // (kind, scope_level, metric, channel|null, value, is_hard)
+  const defaults: Array<[string, string, string, string | null, number, number]> = [
+    ['preference', 'portfolio',   'roas_post_rto',     null, 4.0,  1],
+    // Generic campaign-level fallback for any channel not covered below.
+    ['floor',      'campaign',    'roas_post_rto',     null, 2.0,  1],
+    ['floor',      'asset_group', 'roas_post_rto',     null, 2.0,  1],
+    ['floor',      'keyword',     'roas_post_rto',     null, 1.5,  1],
+    ['floor',      'ad',          'roas_post_rto',     null, 1.5,  1],
+    ['cap',        'campaign',    'budget_step_pct',   null, 0.15, 1],
+    // Funnel-aware per-channel ROAS floors (precedence > generic).
+    ['floor', 'campaign', 'roas_post_rto', 'SEARCH',          3.0, 1],
+    ['floor', 'campaign', 'roas_post_rto', 'SHOPPING',        2.0, 1],
+    ['floor', 'campaign', 'roas_post_rto', 'PERFORMANCE_MAX', 1.2, 1],
+    ['floor', 'campaign', 'roas_post_rto', 'DEMAND_GEN',      0.7, 1],
+    ['floor', 'campaign', 'roas_post_rto', 'VIDEO',           0.5, 1],
+  ];
+
   for (const b of brands) {
-    const has = database.prepare('SELECT 1 FROM rules WHERE brand_id = ? LIMIT 1').get(b.id);
-    if (has) continue;
-    const defaults: Array<[string, string, Record<string, unknown>, number]> = [
-      ['preference', 'portfolio',   { metric: 'roas_post_rto', value: 4.0 }, 1],
-      ['floor',      'campaign',    { metric: 'roas_post_rto', value: 2.0 }, 1],
-      ['floor',      'asset_group', { metric: 'roas_post_rto', value: 2.0 }, 1],
-      ['floor',      'keyword',     { metric: 'roas_post_rto', value: 1.5 }, 1],
-      ['floor',      'ad',          { metric: 'roas_post_rto', value: 1.5 }, 1],
-      ['cap',        'campaign',    { metric: 'budget_step_pct', value: 0.15 }, 1],
-    ];
-    for (const [kind, scope, json, isHard] of defaults) {
+    let added = 0;
+    for (const [kind, scope, metric, channel, value, isHard] of defaults) {
+      if (exists.get(b.id, kind, scope, metric, channel ?? '')) continue;
+      const json: Record<string, unknown> = { metric, value };
+      if (channel) json.channel = channel;
       insert.run(b.id, kind, scope, JSON.stringify(json), isHard);
+      added++;
     }
-    console.log(`[init] Seeded default recommender guardrails for brand ${b.id}`);
+    if (added > 0) console.log(`[init] Seeded ${added} default recommender guardrails for brand ${b.id}`);
   }
 }
 
