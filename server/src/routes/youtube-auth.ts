@@ -23,6 +23,11 @@ import { signState, verifyState } from '../services/youtube/oauth-state.js';
 const YOUTUBE_SCOPES = [
   'https://www.googleapis.com/auth/youtube.upload',
   'https://www.googleapis.com/auth/youtube.readonly',
+  // Drive: download the source video files referenced in the sheet (read-only).
+  'https://www.googleapis.com/auth/drive.readonly',
+  // Sheets: read the upload manifest AND write back the YouTube URL / Status
+  // columns — needs full spreadsheets, not the .readonly variant.
+  'https://www.googleapis.com/auth/spreadsheets',
   // openid + email so we can stamp granted_by_email (the Google account that
   // authorized — not necessarily the same as the app session user).
   'openid',
