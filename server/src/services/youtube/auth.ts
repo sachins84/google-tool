@@ -58,9 +58,12 @@ export async function getAccessToken(refreshToken: string): Promise<GoogleAccess
   return { accessToken: json.access_token, expiresAt };
 }
 
+// Sheets is now read-only (per-row YT URLs land in the youtube_job_rows table
+// and the UI, not back into the source sheet) so the narrower
+// spreadsheets.readonly scope is sufficient.
 export const YOUTUBE_SCOPES = [
   'https://www.googleapis.com/auth/youtube.upload',
   'https://www.googleapis.com/auth/youtube.readonly',
   'https://www.googleapis.com/auth/drive.readonly',
-  'https://www.googleapis.com/auth/spreadsheets',
+  'https://www.googleapis.com/auth/spreadsheets.readonly',
 ];

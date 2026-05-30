@@ -19,8 +19,6 @@ export interface SheetSchema {
   titleCol: number | null;
   descCol: number | null;
   tagsCol: number | null;
-  ytUrlCol: number;         // ensured to exist (appended if missing)
-  statusCol: number;        // ensured to exist
   rows: SheetRow[];
 }
 
@@ -65,8 +63,10 @@ async function sheetsFetch<T>(
 
 /**
  * Read a sheet, auto-detect the Drive-link column + Title/Description/Tags
- * headers (case-insensitive), and make sure "YouTube URL" and "Status" columns
- * exist (append empty headers if they don't).
+ * headers (case-insensitive). The sheet is read-only — per-row status and
+ * the YouTube URL live in the youtube_job_rows table and surface in the UI,
+ * not written back to the source sheet (so a spreadsheets.readonly scope
+ * is sufficient).
  */
 export async function readAndPrepareSheet(
   refreshToken: string,
@@ -137,33 +137,7 @@ export async function readAndPrepareSheet(
   const descCol = findCol('description', 'desc');
   const tagsCol = findCol('tags', 'keywords');
 
-  // Ensure YouTube URL / Status columns exist; append if missing.
-  let ytUrlCol = findCol('youtube url', 'yt url', 'youtube link');
-  let statusCol = findCol('status', 'upload status');
-
-  const extraHeaders: Array<{ col: number; value: string }> = [];
-  let nextCol = colCount;
-  if (ytUrlCol < 0) {
-    ytUrlCol = nextCol++;
-    extraHeaders.push({ col: ytUrlCol, value: 'YouTube URL' });
-  }
-  if (statusCol < 0) {
-    statusCol = nextCol++;
-    extraHeaders.push({ col: statusCol, value: 'Status' });
-  }
-  if (extraHeaders.length) {
-    const data = extraHeaders.map((h) => ({
-      range: `${escTab}!${colLetter(h.col)}1`,
-      values: [[h.value]],
-    }));
-    await sheetsFetch(accessToken, `${spreadsheetId}/values:batchUpdate`, {
-      method: 'POST',
-      body: JSON.stringify({ valueInputOption: 'RAW', data }),
-    });
-    for (const h of extraHeaders) header[h.col] = h.value;
-  }
-
-  const columnLetters = Array.from({ length: Math.max(colCount, ytUrlCol + 1, statusCol + 1) }, (_, i) => colLetter(i));
+  const columnLetters = Array.from({ length: colCount }, (_, i) => colLetter(i));
 
   const rows: SheetRow[] = [];
   for (let i = 0; i < dataRows.length; i++) {
@@ -194,38 +168,6 @@ export async function readAndPrepareSheet(
     titleCol: titleCol >= 0 ? titleCol : null,
     descCol: descCol >= 0 ? descCol : null,
     tagsCol: tagsCol >= 0 ? tagsCol : null,
-    ytUrlCol,
-    statusCol,
     rows,
   };
-}
-
-/**
- * Write status + YT URL for a single row. Caller handles retries.
- */
-export async function writeRowResult(
-  refreshToken: string,
-  schema: SheetSchema,
-  sheetRow: number,
-  status: string,
-  youtubeUrl: string | null
-): Promise<void> {
-  const { accessToken } = await getAccessToken(refreshToken);
-  const escTab = `'${schema.sheetTitle.replace(/'/g, "''")}'`;
-  const data: Array<{ range: string; values: string[][] }> = [
-    {
-      range: `${escTab}!${schema.columnLetters[schema.statusCol]}${sheetRow}`,
-      values: [[status]],
-    },
-  ];
-  if (youtubeUrl) {
-    data.push({
-      range: `${escTab}!${schema.columnLetters[schema.ytUrlCol]}${sheetRow}`,
-      values: [[youtubeUrl]],
-    });
-  }
-  await sheetsFetch(accessToken, `${schema.spreadsheetId}/values:batchUpdate`, {
-    method: 'POST',
-    body: JSON.stringify({ valueInputOption: 'RAW', data }),
-  });
 }

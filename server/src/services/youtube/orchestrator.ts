@@ -1,6 +1,6 @@
 import { getDb } from '../../db/init.js';
 import { getChannelConfig, markChannelRefreshError } from './channels.js';
-import { readAndPrepareSheet, writeRowResult, type SheetSchema } from './sheets.js';
+import { readAndPrepareSheet, type SheetSchema } from './sheets.js';
 import { getDriveFileInfo, parseDriveFileId } from './drive.js';
 import { uploadDriveFileToYouTube } from './upload.js';
 
@@ -118,11 +118,9 @@ async function runJob(jobId: number, refreshToken: string, input: StartJobInput)
     );
   }
 
-  // Mark every queued row as 'queued' in the sheet up front, so the user
-  // sees activity immediately even before the first upload starts.
-  for (const r of schema.rows) {
-    try { await writeRowResult(refreshToken, schema, r.sheetRow, 'queued', null); } catch { /* non-fatal */ }
-  }
+  // Per-row status (queued / done / error) lives in the youtube_job_rows table
+  // and the UI renders it from /api/youtube/jobs/:id — we no longer write back
+  // to the source sheet (read-only Sheets scope is sufficient now).
 
   // Phase 2 — upload one row at a time. Sequential is intentional: YouTube
   // upload bandwidth is the bottleneck, parallel uploads usually don't help
@@ -169,13 +167,11 @@ async function runJob(jobId: number, refreshToken: string, input: StartJobInput)
          WHERE id = ?`
       ).run(result.videoId, result.url, now(), row.id);
       done++;
-      try { await writeRowResult(refreshToken, schema, row.sheet_row, 'done', result.url); } catch { /* non-fatal */ }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       db.prepare(`UPDATE youtube_job_rows SET status='error', error=?, finished_at=? WHERE id = ?`)
         .run(msg, now(), row.id);
       errors++;
-      try { await writeRowResult(refreshToken, schema, row.sheet_row, `error: ${msg.slice(0, 200)}`, null); } catch { /* non-fatal */ }
     }
     db.prepare(`UPDATE youtube_jobs SET done_rows=?, error_rows=? WHERE id = ?`)
       .run(done, errors, jobId);
