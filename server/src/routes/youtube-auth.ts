@@ -19,20 +19,12 @@ import { requireAuth } from '../middleware/auth.js';
 import { getDb } from '../db/init.js';
 import { config } from '../config.js';
 import { signState, verifyState } from '../services/youtube/oauth-state.js';
+import { YOUTUBE_SCOPES as BASE_YOUTUBE_SCOPES } from '../services/youtube/auth.js';
 
-const YOUTUBE_SCOPES = [
-  'https://www.googleapis.com/auth/youtube.upload',
-  'https://www.googleapis.com/auth/youtube.readonly',
-  // Drive: download the source video files referenced in the sheet (read-only).
-  'https://www.googleapis.com/auth/drive.readonly',
-  // Sheets: read the upload manifest AND write back the YouTube URL / Status
-  // columns — needs full spreadsheets, not the .readonly variant.
-  'https://www.googleapis.com/auth/spreadsheets',
-  // openid + email so we can stamp granted_by_email (the Google account that
-  // authorized — not necessarily the same as the app session user).
-  'openid',
-  'email',
-];
+// Single source of truth for Google scopes is `services/youtube/auth.ts` —
+// the consent flow only adds openid + email on top so we can stamp
+// `granted_by_email` (the Google account that authorized).
+const YOUTUBE_SCOPES = [...BASE_YOUTUBE_SCOPES, 'openid', 'email'];
 
 function requireOauthConfig(): { clientId: string; clientSecret: string; baseUrl: string } {
   const { GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, PUBLIC_BASE_URL } = config;
