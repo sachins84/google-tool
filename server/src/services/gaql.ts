@@ -70,6 +70,23 @@ function inClause(ids: string[]): string {
   return `(${ids.map((id) => `'${id}'`).join(', ')})`;
 }
 
+/**
+ * Latest campaign budget — un-segmented (no date filter), so it reflects the
+ * CURRENT budget regardless of how often the budget was changed inside the
+ * dashboard window. Used to override the date-aware daily_budget_inr that
+ * comes back on the main campaigns query, because actions are always applied
+ * against the live budget, not whatever it happened to be on Mon of last week.
+ */
+export function buildCurrentCampaignBudgetsQuery(opts: { campaignIds?: string[] }): string {
+  const where = [`campaign.status != 'REMOVED'`];
+  if (opts.campaignIds?.length) where.push(`campaign.id IN ${inClause(opts.campaignIds)}`);
+  return `
+    SELECT campaign.id, campaign_budget.amount_micros
+    FROM campaign
+    WHERE ${where.join(' AND ')}
+  `.trim();
+}
+
 export function buildCampaignsQuery(opts: BuildOptions): string {
   const fields = [
     'campaign.id',

@@ -10,6 +10,7 @@ import {
   buildKeywordsQuery,
   buildSearchTermsQuery,
   buildPmaxSearchTermsQuery,
+  buildCurrentCampaignBudgetsQuery,
   type Level,
 } from '../services/gaql.js';
 import { search } from '../services/google-ads.js';
@@ -222,6 +223,38 @@ export async function fetchRowsForBrand(
     ...row,
     metrics: applyFlatRto(deriveMetrics(raw), brand.rto_factor),
   }));
+
+  // The date-segmented campaign query returns a campaign_budget snapshot per
+  // date, and our aggregator only consumed the FIRST row's value — meaning a
+  // budget changed mid-window showed up as the historical amount, not the
+  // current one. Override with a tiny un-segmented "current budget" query so
+  // both the dashboard and any action (e.g. update_budget recommendations)
+  // see the live amount.
+  if (level === 'campaign') {
+    const budgetsByKey = new Map<string, number>(); // customer_id|campaign_id → ₹/day
+    const budgetQuery = buildCurrentCampaignBudgetsQuery({ campaignIds: campaignId ? [campaignId] : undefined });
+    const perAccountBudgets = await Promise.all(
+      brand.accounts.map(async (acc) => {
+        const loginCustomerId = (await getLoginCustomerId(acc.customer_id)) ?? undefined;
+        try {
+          const bRows = await search<{ campaign?: { id?: string }; campaignBudget?: { amountMicros?: string } }>(
+            { customerId: acc.customer_id, loginCustomerId, query: budgetQuery }
+          );
+          return { customerId: acc.customer_id, rows: bRows };
+        } catch { return { customerId: acc.customer_id, rows: [] }; }
+      })
+    );
+    for (const { customerId, rows: bRows } of perAccountBudgets) {
+      for (const b of bRows) {
+        if (!b.campaign?.id || !b.campaignBudget?.amountMicros) continue;
+        budgetsByKey.set(`${customerId}|${b.campaign.id}`, Number(b.campaignBudget.amountMicros) / MICROS);
+      }
+    }
+    rows = rows.map((r) => {
+      const cur = r.campaign_id ? budgetsByKey.get(`${r.customer_id}|${r.campaign_id}`) : undefined;
+      return cur != null ? { ...r, daily_budget_inr: cur } : r;
+    });
+  }
 
   // If brand is on Redshift mode and we're at campaign level, join in NCs / AOV / calc ROAS
   if (level === 'campaign' && brand.rto_mode === 'redshift') {
