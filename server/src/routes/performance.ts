@@ -540,13 +540,18 @@ async function mergeRedshiftMetrics(rows: Row[], brandId: number, from: string, 
       const agTargets = agNameToCampaignId.get(lcKey) ?? agNameToCampaignId.get(normKey);
       if (agTargets && agTargets.length) {
         // Same asset_group name often lives in N PMax campaigns — distribute
-        // equally across only the campaigns that ran in this window (skip
-        // paused / zero-spend ones). Falls back to all candidates if none of
-        // them spent today (data-quality fallback, rarely hit).
+        // equally across only the campaigns that spent in this window. If NONE
+        // spent (asset_group still exists inside paused campaigns only), don't
+        // attribute to a paused row — leave this NC unconsumed so it flows to
+        // the synthetic "Other PMax" residual. Paused campaigns shouldn't get
+        // credit for NCs they couldn't have driven during this window; the old
+        // "fallback to all candidates" path was crediting paused-only families
+        // (e.g. when an asset_group named "Nutrimix" only lives in paused
+        // AllProduct campaigns) and over-counting their NCs.
         const active = agTargets.filter((cid) => activeCampaignIds.has(cid));
-        const targets = active.length ? active : agTargets;
-        const share = { ncs: r.ncs / targets.length, amount: r.amount / targets.length };
-        for (const cid of targets) add(byId, cid, share);
+        if (!active.length) continue;
+        const share = { ncs: r.ncs / active.length, amount: r.amount / active.length };
+        for (const cid of active) add(byId, cid, share);
         continue;
       }
       add(byName, lcKey, entry);
@@ -589,7 +594,12 @@ async function mergeRedshiftMetrics(rows: Row[], brandId: number, from: string, 
       const skuTarget = skuToCampaignId.get(lcKey);
       const agTargets = agNameToCampaignId.get(lcKey) ?? agNameToCampaignId.get(normKey);
       if ((skuTarget && matchedCampaignIds.has(skuTarget))
-          || (agTargets && agTargets.some((cid) => matchedCampaignIds.has(cid)))
+          // Asset-group equal-split: only count as attributed if at least one
+          // campaign owning this asset_group is ACTIVE in the window — mirrors
+          // the first-pass filter so we don't mark the row consumed when the
+          // first pass actually skipped it (would otherwise drop those NCs
+          // instead of routing them to the synthetic "Other" residual).
+          || (agTargets && agTargets.some((cid) => activeCampaignIds.has(cid)))
           || matchedNames.has(lcKey)
           || matchedNormNames.has(normKey)) {
         attributed = true;
