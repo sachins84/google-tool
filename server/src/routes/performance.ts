@@ -1011,7 +1011,13 @@ export async function performanceRoutes(app: FastifyInstance): Promise<void> {
           ]);
         }
 
-        return { rows: primary, brand_redshift_totals, network_split, pmax_channel_split };
+        // RTO factor is what attachRedshiftMetrics already applied to ncs/ncs_amount
+        // (so the per-row Redshift totals are already post-RTO). We surface it so the
+        // KPI strip can also apply RTO to the Google-side ROAS / CPA tiles for
+        // display-consistency with the per-row post-RTO numbers.
+        const brand = getBrand(q.brand_id);
+        const rto_factor = brand?.rto_factor ?? 0;
+        return { rows: primary, brand_redshift_totals, network_split, pmax_channel_split, rto_factor };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         app.log.error({ err: message }, `${level} fetch failed`);

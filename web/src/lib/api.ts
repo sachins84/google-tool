@@ -100,6 +100,7 @@ export const api = {
         clicks: number;
         conversions: number;
       }>;
+      rto_factor?: number;
     }>(`/api/${level}?${qs.toString()}`);
   },
 

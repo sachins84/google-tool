@@ -93,7 +93,6 @@ export async function fetchByCampaign(opts: FetchOptions): Promise<FunnelMetrics
       FROM ${opts.funnelTable}
       WHERE dt BETWEEN $1 AND $2
         AND ${srcSql}
-        AND utm_campaign IS NOT NULL AND utm_campaign <> ''
       GROUP BY utm_source, utm_campaign
     `;
     const result = await client.query(sql, [opts.dateFrom, opts.dateTo, ...srcParams]);

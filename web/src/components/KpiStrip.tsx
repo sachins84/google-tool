@@ -13,6 +13,12 @@ interface Props {
     primary?: { ncs: number; amount: number };
     compare?: { ncs: number; amount: number };
   };
+  /**
+   * Brand's RTO factor (e.g. 0.10 = 10%). Applied to the Google-side tiles so
+   * ROAS / CPA values shown there are post-RTO and consistent with the rest of
+   * the dashboard (per the project's "always show post-RTO" rule).
+   */
+  rtoFactor?: number;
 }
 
 interface Totals {
@@ -54,10 +60,11 @@ function compTotals(rows: PerfRow[]) {
   );
 }
 
-export function KpiStrip({ rows, hasCompare, brandTotals }: Props) {
+export function KpiStrip({ rows, hasCompare, brandTotals, rtoFactor = 0 }: Props) {
   const cur = totals(rows);
   const cmp = compTotals(rows);
   const hasCalc = !!brandTotals?.primary || rows.some((r) => r.metrics.ncs != null);
+  const rtoMul = Math.max(0, Math.min(1, 1 - rtoFactor));
 
   // Prefer brand-wide Redshift totals (independent of per-row matching) when available.
   // Falls back to row-summed NCs when not (e.g. on non-LJ brands or other tabs).
@@ -66,15 +73,17 @@ export function KpiStrip({ rows, hasCompare, brandTotals }: Props) {
   const cmpNcsTotal = brandTotals?.compare?.ncs ?? cmp?.ncs;
   const cmpNcsAmountTotal = brandTotals?.compare?.amount ?? cmp?.ncs_amount;
 
-  const googleRoas = cur.cost ? cur.conversions_value / cur.cost : 0;
+  // Google-side ROAS / CPA are post-RTO too (× rtoMul applied to the value and
+  // conversion count so the tiles stay consistent with the post-RTO calc-side).
+  const googleRoas = cur.cost ? (cur.conversions_value * rtoMul) / cur.cost : 0;
   const calcRoas = cur.cost ? ncsAmountTotal / cur.cost : 0;
-  const cpa = cur.conversions ? cur.cost / cur.conversions : 0;
+  const cpa = cur.conversions ? cur.cost / (cur.conversions * rtoMul) : 0;
   const calcCpa = ncsTotal ? cur.cost / ncsTotal : 0;
   const aov = ncsTotal ? ncsAmountTotal / ncsTotal : 0;
 
-  const cmpGoogleRoas = cmp && cmp.cost ? cmp.conversions_value / cmp.cost : undefined;
+  const cmpGoogleRoas = cmp && cmp.cost ? (cmp.conversions_value * rtoMul) / cmp.cost : undefined;
   const cmpCalcRoas = cmp && cmp.cost && cmpNcsAmountTotal != null ? cmpNcsAmountTotal / cmp.cost : undefined;
-  const cmpCpa = cmp && cmp.conversions ? cmp.cost / cmp.conversions : undefined;
+  const cmpCpa = cmp && cmp.conversions ? cmp.cost / (cmp.conversions * rtoMul) : undefined;
   const cmpCalcCpa = cmp && cmp.cost && cmpNcsTotal ? cmp.cost / cmpNcsTotal : undefined;
   const cmpAov = cmpNcsTotal && cmpNcsAmountTotal != null ? cmpNcsAmountTotal / cmpNcsTotal : undefined;
 

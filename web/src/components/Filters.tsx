@@ -126,7 +126,9 @@ export function Filters({ state, onChange, showChannelType, isSearchTerms = fals
 
 export function defaultFilterState(): FilterState {
   return {
-    status: 'enabled',
+    // Default to 'all' so the KPI strip and the visible row sums always
+    // reconcile — operators can flip to 'enabled' for the working view.
+    status: 'all',
     searchTermStatus: 'none', // most actionable by default
     channelTypes: new Set(),
     hideZeroSpend: true,
@@ -163,7 +165,10 @@ export function applyFilters(
     if (f.hideZeroSpend && !r.synthetic) {
       if (options.isPmaxSearchInsights) {
         if ((r.metrics?.impressions ?? 0) <= 0) return false;
-      } else if ((r.metrics?.cost ?? 0) <= 0) {
+      } else if ((r.metrics?.cost ?? 0) <= 0 && !((r.metrics?.ncs ?? 0) > 0)) {
+        // Keep zero-spend rows that still carry attributed NCs (late conversions
+        // on now-paused campaigns) so the KPI tile reconciles with the visible
+        // row sums. Drop only rows with NO spend AND no attributed NCs.
         return false;
       }
     }

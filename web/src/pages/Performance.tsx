@@ -88,6 +88,7 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
     primary?: { ncs: number; amount: number };
     compare?: { ncs: number; amount: number };
   } | undefined>(undefined);
+  const [brandRtoFactor, setBrandRtoFactor] = useState<number>(0);
   const [networkSplit, setNetworkSplit] = useState<NetworkSplitEntry[]>([]);
   const [pmaxBrandSplit, setPmaxBrandSplit] = useState<Array<{
     channel: string; cost: number; impressions: number; clicks: number; conversions: number;
@@ -126,10 +127,12 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
           brand_redshift_totals?: typeof brandTotals;
           network_split?: NetworkSplitEntry[];
           pmax_channel_split?: typeof pmaxBrandSplit;
+          rto_factor?: number;
         };
         setBrandTotals(r.brand_redshift_totals);
         setNetworkSplit(r.network_split ?? []);
         setPmaxBrandSplit(r.pmax_channel_split ?? []);
+        setBrandRtoFactor(r.rto_factor ?? 0);
       })
       .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : String(err)); })
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -145,17 +148,10 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
     [rows, filter, tab, isPmaxSearchInsights]
   );
 
-  // KPI tiles ignore the row-level status filter so the headline Spend reflects
-  // the TRUE total for the date range (incl. PAUSED) — the table's default
-  // "enabled-only" view was silently hiding paused-campaign spend from the
-  // headline. Channel + hide-zero-spend filters still apply.
-  const kpiRows = useMemo(
-    () => applyFilters(rows, { ...filter, status: 'all', searchTermStatus: 'all' }, {
-      isSearchTerms: tab === 'search_terms',
-      isPmaxSearchInsights,
-    }),
-    [rows, filter, tab, isPmaxSearchInsights]
-  );
+  // KPI tile now uses the same filteredRows as the table, so the headline
+  // always reconciles with what you'd sum from the rows below. The default
+  // status filter is 'all' (see Filters.defaultFilterState), so paused-
+  // campaign spend isn't silently hidden by default.
 
   const hasCalcMetrics = useMemo(
     () => filteredRows.some((r) => r.metrics?.ncs != null),
@@ -263,9 +259,10 @@ export function Performance({ brandId, from, to, compareFrom, compareTo }: Props
       {!isCustomTab && (
         <>
           <KpiStrip
-            rows={kpiRows}
+            rows={filteredRows}
             hasCompare={hasCompare}
             brandTotals={tab === 'campaigns' ? brandTotals : undefined}
+            rtoFactor={brandRtoFactor}
           />
           {tab === 'campaigns' && !drill.campaignId && (networkSplit.length > 0 || pmaxBrandSplit.length > 0) && (
             <NetworkSplit entries={networkSplit} pmaxBrandSplit={pmaxBrandSplit} />
