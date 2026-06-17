@@ -66,12 +66,18 @@ export function KpiStrip({ rows, hasCompare, brandTotals, rtoFactor = 0 }: Props
   const hasCalc = !!brandTotals?.primary || rows.some((r) => r.metrics.ncs != null);
   const rtoMul = Math.max(0, Math.min(1, 1 - rtoFactor));
 
-  // Prefer brand-wide Redshift totals (independent of per-row matching) when available.
-  // Falls back to row-summed NCs when not (e.g. on non-LJ brands or other tabs).
-  const ncsTotal = brandTotals?.primary?.ncs ?? cur.ncs;
-  const ncsAmountTotal = brandTotals?.primary?.amount ?? cur.ncs_amount;
-  const cmpNcsTotal = brandTotals?.compare?.ncs ?? cmp?.ncs;
-  const cmpNcsAmountTotal = brandTotals?.compare?.amount ?? cmp?.ncs_amount;
+  // Use row-summed NCs (cur.ncs / cur.ncs_amount) so the tile respects every
+  // active filter — channel, status, hide-zero-spend. Previously we preferred
+  // brand_redshift_totals (a brand-wide Redshift query that ignored frontend
+  // filters), which made Calc-ROAS / NCs / AOV asymmetric when the user filtered
+  // by channel: Spend dropped to the filtered slice but NCs stayed brand-wide,
+  // inflating Calc-ROAS dramatically. Now that the per-row attribution reconciles
+  // to brand totals within ~0.2% (after the fetchByCampaign fix), the row-summed
+  // approach gives both accuracy AND filter-responsiveness.
+  const ncsTotal = cur.ncs;
+  const ncsAmountTotal = cur.ncs_amount;
+  const cmpNcsTotal = cmp?.ncs;
+  const cmpNcsAmountTotal = cmp?.ncs_amount;
 
   // Google-side ROAS / CPA are post-RTO too (× rtoMul applied to the value and
   // conversion count so the tiles stay consistent with the post-RTO calc-side).
