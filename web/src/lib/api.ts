@@ -296,6 +296,26 @@ export const api = {
       rto_factor: number;
     }>(`/api/daily?brand_id=${brandId}&from=${from}&to=${to}`),
 
+  dailyByCampaign: (brandId: number, from: string, to: string) =>
+    request<{
+      rows: Array<{
+        customer_id: string; campaign_id: string; campaign_name: string; channel_type: string; status: string;
+        by_date: Record<string, {
+          cost: number; ncs: number; amount: number;
+          google_roas: number; calc_roas: number; calc_cpa: number;
+          conversions_post_rto: number;
+        }>;
+        totals: {
+          cost: number; ncs: number; amount: number; aov: number;
+          calc_roas: number; calc_cpa: number; google_roas: number;
+          conversions_post_rto: number; impressions: number; clicks: number;
+        };
+      }>;
+      dates: string[];
+      rto_factor: number;
+      brand_daily: Array<{ date: string; cost: number; ncs: number; amount: number }>;
+    }>(`/api/daily?brand_id=${brandId}&from=${from}&to=${to}&group_by=campaign`),
+
   // ── Recommender ──────────────────────────────────────────────────────
   recommendations: (brandId: number, runDate?: string) => {
     const qs = new URLSearchParams({ brand_id: String(brandId) });
