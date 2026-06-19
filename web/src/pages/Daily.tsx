@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../lib/api';
 
 interface Props {
@@ -24,15 +24,7 @@ const fmtDateShort = (d: string): string => {
   catch { return d; }
 };
 
-type Metric = 'cost' | 'ncs' | 'amount' | 'calc_roas' | 'calc_cpa' | 'google_roas';
-const METRICS: Array<{ key: Metric; label: string; fmt: (n: number) => string }> = [
-  { key: 'cost',        label: 'Spend',          fmt: inr },
-  { key: 'ncs',         label: 'NCs',            fmt: num },
-  { key: 'amount',      label: 'NC Amount',      fmt: inr },
-  { key: 'calc_roas',   label: 'Calc ROAS',      fmt: mul },
-  { key: 'calc_cpa',    label: 'Calc CPA',       fmt: inr },
-  { key: 'google_roas', label: 'G ROAS (post-RTO)', fmt: mul },
-];
+// Metric selector is gone — flat layout now shows every metric on every row.
 
 export function Daily({ brandId, brandName, from, to }: Props) {
   const [mode, setMode] = useState<'brand' | 'campaign'>('brand');
@@ -40,8 +32,6 @@ export function Daily({ brandId, brandName, from, to }: Props) {
   const [pivot, setPivot] = useState<CampaignPivot | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [metric, setMetric] = useState<Metric>('cost');
-
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
@@ -67,17 +57,6 @@ export function Daily({ brandId, brandName, from, to }: Props) {
           <button onClick={() => setMode('brand')} className={`px-3 py-1.5 ${mode === 'brand' ? 'bg-black text-white' : 'bg-white hover:bg-gray-50'}`}>Brand totals</button>
           <button onClick={() => setMode('campaign')} className={`px-3 py-1.5 ${mode === 'campaign' ? 'bg-black text-white' : 'bg-white hover:bg-gray-50'}`}>By campaign</button>
         </div>
-        {mode === 'campaign' && (
-          <div className="flex items-center gap-1 text-xs">
-            <span className="text-gray-500 mr-1">Metric:</span>
-            {METRICS.map((m) => (
-              <button key={m.key} onClick={() => setMetric(m.key)}
-                className={`px-2 py-1 rounded ${metric === m.key ? 'bg-black text-white' : 'bg-gray-100 hover:bg-gray-200'}`}>
-                {m.label}
-              </button>
-            ))}
-          </div>
-        )}
         <div className="flex-1" />
         <button onClick={load} disabled={loading} className="text-xs px-3 py-1.5 rounded border hover:bg-gray-50 disabled:opacity-50">
           {loading ? 'Refreshing…' : 'Refresh'}
@@ -88,7 +67,7 @@ export function Daily({ brandId, brandName, from, to }: Props) {
 
       {mode === 'brand'
         ? <BrandTable data={brandData} loading={loading} />
-        : <CampaignPivotTable pivot={pivot} metric={metric} loading={loading} />}
+        : <CampaignPivotTable pivot={pivot} loading={loading} />}
     </div>
   );
 }
@@ -167,83 +146,78 @@ function BrandTable({ data, loading }: { data: { rows: BrandRow[]; rto_factor: n
   );
 }
 
-function CampaignPivotTable({ pivot, metric, loading }: { pivot: CampaignPivot | null; metric: Metric; loading: boolean }) {
+function CampaignPivotTable({ pivot, loading }: { pivot: CampaignPivot | null; loading: boolean }) {
   if (loading && !pivot) return <div className="text-sm text-gray-500 py-8 text-center">Loading…</div>;
   if (!pivot || pivot.rows.length === 0) return <div className="text-sm text-gray-500 py-8 text-center">No data.</div>;
-  const fmt = METRICS.find((m) => m.key === metric)!.fmt;
-  const metricLabel = METRICS.find((m) => m.key === metric)!.label;
-  const cellValue = (cell: { cost: number; ncs: number; amount: number; calc_roas: number; calc_cpa: number; google_roas: number } | undefined): number => {
-    if (!cell) return 0;
-    switch (metric) {
-      case 'cost': return cell.cost;
-      case 'ncs': return cell.ncs;
-      case 'amount': return cell.amount;
-      case 'calc_roas': return cell.calc_roas;
-      case 'calc_cpa': return cell.calc_cpa;
-      case 'google_roas': return cell.google_roas;
-    }
-  };
-  const totalValue = (t: CampaignPivot['rows'][number]['totals']): number => {
-    switch (metric) {
-      case 'cost': return t.cost;
-      case 'ncs': return t.ncs;
-      case 'amount': return t.amount;
-      case 'calc_roas': return t.calc_roas;
-      case 'calc_cpa': return t.calc_cpa;
-      case 'google_roas': return t.google_roas;
-    }
-  };
-  const brandDailyValue = (b: CampaignPivot['brand_daily'][number]): number => {
-    switch (metric) {
-      case 'cost': return b.cost;
-      case 'ncs': return b.ncs;
-      case 'amount': return b.amount;
-      case 'calc_roas': return b.cost > 0 ? b.amount / b.cost : 0;
-      case 'calc_cpa': return b.ncs > 0 ? b.cost / b.ncs : 0;
-      case 'google_roas': return 0; // Not applicable at brand-daily footer for this metric
-    }
-  };
+
+  // For each date, build a sorted list of (campaign, cell) entries that have
+  // any signal (cost > 0 OR ncs > 0), descending by spend.
+  const perDate = pivot.dates.map((date) => {
+    const entries = pivot.rows
+      .map((r) => ({ row: r, cell: r.by_date[date] }))
+      .filter(({ cell }) => cell && ((cell.cost ?? 0) > 0 || (cell.ncs ?? 0) > 0))
+      .sort((a, b) => (b.cell?.cost ?? 0) - (a.cell?.cost ?? 0));
+    const brand = pivot.brand_daily.find((b) => b.date === date);
+    return { date, entries, brand };
+  });
+
   return (
     <div className="bg-white border rounded-lg overflow-x-auto">
-      <table className="text-sm border-collapse">
+      <table className="w-full text-sm border-collapse">
         <thead>
           <tr className="text-xs text-gray-500 border-b bg-gray-50">
-            <th className="text-left font-medium py-2 px-3 sticky left-0 bg-gray-50 z-10 min-w-[260px]">
-              Campaign <span className="text-gray-400 font-normal">· {metricLabel}</span>
-            </th>
-            {pivot.dates.map((d) => (
-              <th key={d} className="text-right font-medium py-2 px-2 whitespace-nowrap">{fmtDateShort(d)}</th>
-            ))}
-            <th className="text-right font-medium py-2 px-3 whitespace-nowrap bg-gray-100">Total</th>
+            <th className="text-left font-medium py-2 px-3">Date</th>
+            <th className="text-left font-medium py-2 px-2">Campaign</th>
+            <th className="text-right font-medium py-2 px-2">Spend</th>
+            <th className="text-right font-medium py-2 px-2">NCs</th>
+            <th className="text-right font-medium py-2 px-2">NC Amt</th>
+            <th className="text-right font-medium py-2 px-2">AOV</th>
+            <th className="text-right font-medium py-2 px-2">Calc ROAS</th>
+            <th className="text-right font-medium py-2 px-3">G ROAS (post-RTO)</th>
           </tr>
         </thead>
         <tbody>
-          {pivot.rows.map((r) => (
-            <tr key={`${r.customer_id}|${r.campaign_id}`} className="border-b last:border-0 hover:bg-gray-50 tabular-nums">
-              <td className="py-1.5 px-3 sticky left-0 bg-white max-w-[260px]">
-                <div className="truncate font-medium" title={r.campaign_name}>{r.campaign_name}</div>
-                <div className="text-[10px] text-gray-400">{r.channel_type} · {r.status}</div>
-              </td>
-              {pivot.dates.map((d) => (
-                <td key={d} className="px-2 text-right">{fmt(cellValue(r.by_date[d]))}</td>
+          {perDate.map(({ date, entries, brand }) => (
+            <Fragment key={date}>
+              {entries.map(({ row, cell }, idx) => (
+                <tr key={`${date}|${row.customer_id}|${row.campaign_id}`}
+                    className={`hover:bg-gray-50 tabular-nums ${idx === 0 ? 'border-t-2 border-t-gray-300' : 'border-b'}`}>
+                  <td className="py-1.5 px-3 whitespace-nowrap font-medium align-top">
+                    {idx === 0 ? fmtDate(date) : ''}
+                  </td>
+                  <td className="px-2">
+                    <div className="font-medium truncate max-w-[280px]" title={row.campaign_name}>{row.campaign_name}</div>
+                    <div className="text-[10px] text-gray-400">{row.channel_type} · {row.status}</div>
+                  </td>
+                  <td className="px-2 text-right">{inr(cell!.cost)}</td>
+                  <td className="px-2 text-right">{num(cell!.ncs)}</td>
+                  <td className="px-2 text-right">{inr(cell!.amount)}</td>
+                  <td className="px-2 text-right">{cell!.ncs > 0 ? inr(cell!.amount / cell!.ncs) : '—'}</td>
+                  <td className="px-2 text-right">{mul(cell!.calc_roas)}</td>
+                  <td className="px-3 text-right">{mul(cell!.google_roas)}</td>
+                </tr>
               ))}
-              <td className="px-3 text-right font-semibold bg-gray-50/60">{fmt(totalValue(r.totals))}</td>
-            </tr>
+              {brand && (
+                <tr className="bg-gray-50 font-semibold border-b border-t tabular-nums">
+                  <td className="py-1.5 px-3"></td>
+                  <td className="px-2 text-gray-600">— Brand total —</td>
+                  <td className="px-2 text-right">{inr(brand.cost)}</td>
+                  <td className="px-2 text-right">{num(brand.ncs)}</td>
+                  <td className="px-2 text-right">{inr(brand.amount)}</td>
+                  <td className="px-2 text-right">{brand.ncs > 0 ? inr(brand.amount / brand.ncs) : '—'}</td>
+                  <td className="px-2 text-right">{brand.cost > 0 ? mul(brand.amount / brand.cost) : '—'}</td>
+                  <td className="px-3 text-right text-gray-400">—</td>
+                </tr>
+              )}
+            </Fragment>
           ))}
-          <tr className="bg-gray-100 font-semibold border-t-2 tabular-nums">
-            <td className="py-2 px-3 sticky left-0 bg-gray-100">Brand daily total</td>
-            {pivot.brand_daily.map((b) => (
-              <td key={b.date} className="px-2 text-right">{fmt(brandDailyValue(b))}</td>
-            ))}
-            <td className="px-3 text-right">{fmt(pivot.brand_daily.reduce((s, b) => s + brandDailyValue(b), 0))}</td>
-          </tr>
         </tbody>
       </table>
       <p className="text-[11px] text-gray-400 px-3 py-2 max-w-3xl">
-        Per-day cell NCs are distributed across campaigns proportionally to each campaign's share of the day's brand spend
-        — column totals reconcile to the Brand-totals view. <strong className="text-gray-500">Per-campaign Calc ROAS</strong> in
-        this pivot therefore equals the day's brand ROAS by construction; for true per-campaign ROAS use the main Campaigns table
-        (which has the full utm_campaign attribution).
+        Per-(date, campaign) NCs are distributed by each campaign's share of that day's brand spend so daily totals reconcile to
+        the Brand-totals view. <strong className="text-gray-500">Per-campaign Calc ROAS</strong> in this view therefore equals
+        the day's brand ROAS by construction — for true per-campaign ROAS use the main Campaigns tab (which has the full
+        utm_campaign attribution). All NC / ROAS values shown here are post-RTO at the brand's configured factor.
       </p>
     </div>
   );
