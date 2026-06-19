@@ -43,8 +43,9 @@ export function Actions({ brandId, brandName }: Props) {
   const [source, setSource] = useState<'engine' | 'rules'>('engine');
   const [running, setRunning] = useState(false);
   const [showRules, setShowRules] = useState(false);
-  const [showSummary, setShowSummary] = useState(false);
+  const [showHistory, setShowHistory] = useState(true); // Run history is the audit trail — visible by default.
   const [showMix, setShowMix] = useState(false);
+  const [selectedRunDate, setSelectedRunDate] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [overrideId, setOverrideId] = useState<number | null>(null);
   const [overrideVal, setOverrideVal] = useState<string>('');
@@ -57,12 +58,15 @@ export function Actions({ brandId, brandName }: Props) {
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const res = await api.recommendations(brandId);
+      const res = await api.recommendations(brandId, selectedRunDate ?? undefined);
       setData(res);
       if (res.run?.eval_window_days) setWindowDays(res.run.eval_window_days);
     } catch (e) { setError(e instanceof Error ? e.message : 'Failed to load'); }
     finally { setLoading(false); }
-  }, [brandId]);
+  }, [brandId, selectedRunDate]);
+
+  // Reset selected historic run when brand changes — avoid loading another brand's run-date.
+  useEffect(() => { setSelectedRunDate(null); }, [brandId]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -169,15 +173,21 @@ export function Actions({ brandId, brandName }: Props) {
         <span className="text-xs text-gray-400">re-running replaces today's run</span>
         <div className="flex-1" />
         <button onClick={() => setShowMix((s) => !s)} className="px-3 py-1.5 rounded border text-xs hover:bg-gray-50">{showMix ? 'Hide channel mix' : 'Channel mix'}</button>
-        <button onClick={() => setShowSummary((s) => !s)} className="px-3 py-1.5 rounded border text-xs hover:bg-gray-50">{showSummary ? 'Hide daily check' : 'Daily check'}</button>
+        <button onClick={() => setShowHistory((s) => !s)} className="px-3 py-1.5 rounded border text-xs hover:bg-gray-50">{showHistory ? 'Hide run history' : 'Run history'}</button>
         <button onClick={() => setShowRules((s) => !s)} className="px-3 py-1.5 rounded border text-xs hover:bg-gray-50">{showRules ? 'Hide guardrails' : 'Guardrails'}</button>
       </div>
 
       {run?.notes && <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">{run.notes}</div>}
       {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">{error}</div>}
 
+      {showHistory && (
+        <RunHistory
+          brandId={brandId}
+          selectedDate={selectedRunDate ?? run?.run_date ?? null}
+          onSelect={(d) => setSelectedRunDate(d)}
+        />
+      )}
       {showMix && <ChannelMix brandId={brandId} window={run?.eval_window_days ? `${run.eval_window_days}d` : '7d'} />}
-      {showSummary && <DailyCheck brandId={brandId} />}
       {showRules && (
         <RulesPanel
           brandId={brandId}
@@ -390,28 +400,123 @@ function Comments({ recId, onChanged }: { recId: number; onChanged: () => void }
   );
 }
 
-function DailyCheck({ brandId }: { brandId: number }) {
-  const [rows, setRows] = useState<Array<{ run_date: string; bucket: string; level: string; suggested: number; actioned: number; rejected: number; pending: number }>>([]);
+// Per-run history table — one row per recommendation_run with totals + per-bucket
+// suggested-vs-actioned counts. Clicking a row loads that run in the main view.
+function RunHistory({ brandId, selectedDate, onSelect }: {
+  brandId: number;
+  selectedDate: string | null;
+  onSelect: (d: string | null) => void;
+}) {
+  type RunRow = {
+    run_id: number; run_date: string; trigger: string; status: string;
+    started_at: number | null; finished_at: number | null;
+    eval_window_days: number | null;
+    current_blended_roas: number | null;
+    portfolio_target_roas: number | null;
+    projected_blended_roas: number | null;
+    target_reachable: boolean | null;
+    totals: { suggested: number; actioned: number; executed: number; rejected: number; pending: number; overridden: number };
+    buckets: Record<string, { suggested: number; actioned: number; executed: number; rejected: number; pending: number; overridden: number }>;
+  };
+  const [rows, setRows] = useState<RunRow[]>([]);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => { void (async () => { try { setRows((await api.recommendationSummary(brandId, 30)).summary); } catch (e) { setError(e instanceof Error ? e.message : 'Failed'); } })(); }, [brandId]);
+  const [loading, setLoading] = useState(false);
+  useEffect(() => {
+    void (async () => {
+      setLoading(true);
+      try { setRows((await api.recommendationRuns(brandId, 30)).runs); }
+      catch (e) { setError(e instanceof Error ? e.message : 'Failed'); }
+      finally { setLoading(false); }
+    })();
+  }, [brandId]);
+
+  const totalSug = rows.reduce((s, r) => s + r.totals.suggested, 0);
+  const totalAct = rows.reduce((s, r) => s + r.totals.actioned, 0);
+  const totalRej = rows.reduce((s, r) => s + r.totals.rejected, 0);
+  const totalPen = rows.reduce((s, r) => s + r.totals.pending, 0);
+
   return (
     <div className="bg-white border rounded-lg p-4 overflow-x-auto">
-      <h3 className="font-semibold text-sm mb-2">Daily check — suggestions vs actions (last 30d, by bucket & level)</h3>
+      <div className="flex flex-wrap items-baseline justify-between gap-2 mb-2">
+        <h3 className="font-semibold text-sm">Run history — suggestions vs actions (last 30 days)</h3>
+        {selectedDate && <button onClick={() => onSelect(null)} className="text-xs text-blue-600 hover:underline">Back to latest run</button>}
+      </div>
       {error && <div className="text-xs text-red-600">{error}</div>}
-      {rows.length === 0 ? <div className="text-xs text-gray-400">No runs yet.</div> : (
-        <table className="w-full text-xs border-collapse">
-          <thead><tr className="text-gray-500 text-left border-b"><th className="py-1.5 px-2">Date</th><th className="px-2">Bucket</th><th className="px-2">Level</th><th className="px-2 text-right">Suggested</th><th className="px-2 text-right">Actioned</th><th className="px-2 text-right">Rejected</th><th className="px-2 text-right">Pending</th><th className="px-2 text-right">Action rate</th></tr></thead>
-          <tbody>
-            {rows.map((r, i) => (
-              <tr key={i} className="border-b last:border-0">
-                <td className="py-1.5 px-2">{r.run_date}</td><td className="px-2">{r.bucket}</td><td className="px-2 text-gray-500">{r.level}</td>
-                <td className="px-2 text-right tabular-nums">{r.suggested}</td><td className="px-2 text-right tabular-nums text-green-700">{r.actioned}</td>
-                <td className="px-2 text-right tabular-nums text-red-600">{r.rejected}</td><td className="px-2 text-right tabular-nums text-gray-500">{r.pending}</td>
-                <td className="px-2 text-right tabular-nums">{r.suggested ? Math.round((r.actioned / r.suggested) * 100) : 0}%</td>
+      {loading && rows.length === 0 ? <div className="text-xs text-gray-400">Loading…</div>
+      : rows.length === 0 ? <div className="text-xs text-gray-400">No runs in the last 30 days. Click <b>Run now</b> above to generate one.</div>
+      : (
+        <>
+          <table className="w-full text-xs border-collapse">
+            <thead>
+              <tr className="text-gray-500 text-left border-b">
+                <th className="py-1.5 px-2">Date</th>
+                <th className="px-2">Window</th>
+                <th className="px-2">Trigger</th>
+                <th className="px-2">Status</th>
+                <th className="px-2 text-right">Blended ROAS</th>
+                <th className="px-2 text-right">Projected</th>
+                <th className="px-2 text-right">Suggested</th>
+                <th className="px-2 text-right">Actioned</th>
+                <th className="px-2 text-right">Rate</th>
+                <th className="px-2 text-right">Rejected</th>
+                <th className="px-2 text-right">Pending</th>
+                <th className="px-2">By bucket (actioned / suggested)</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {rows.map((r) => {
+                const isSel = (selectedDate ?? rows[0]?.run_date) === r.run_date;
+                const rate = r.totals.suggested ? Math.round((r.totals.actioned / r.totals.suggested) * 100) : 0;
+                return (
+                  <tr key={r.run_id}
+                      onClick={() => onSelect(r.run_date)}
+                      className={`border-b last:border-0 cursor-pointer hover:bg-blue-50 ${isSel ? 'bg-blue-50/60' : ''}`}
+                      title="Click to load this run's recommendations">
+                    <td className="py-1.5 px-2 whitespace-nowrap font-medium">{r.run_date}</td>
+                    <td className="px-2 whitespace-nowrap text-gray-600">{r.eval_window_days ? `${r.eval_window_days}d` : '—'}</td>
+                    <td className="px-2 whitespace-nowrap text-gray-500">{r.trigger}</td>
+                    <td className="px-2 whitespace-nowrap"><span className={`px-1.5 py-0.5 rounded text-[10px] ${r.status === 'completed' ? 'bg-green-100 text-green-700' : r.status === 'failed' ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-600'}`}>{r.status}</span></td>
+                    <td className="px-2 text-right tabular-nums">{r.current_blended_roas != null ? `${r.current_blended_roas.toFixed(2)}x` : '—'}</td>
+                    <td className={`px-2 text-right tabular-nums ${r.projected_blended_roas != null && r.portfolio_target_roas != null && r.projected_blended_roas >= r.portfolio_target_roas ? 'text-green-600' : 'text-amber-600'}`}>
+                      {r.projected_blended_roas != null ? `${r.projected_blended_roas.toFixed(2)}x` : '—'}
+                    </td>
+                    <td className="px-2 text-right tabular-nums">{r.totals.suggested}</td>
+                    <td className="px-2 text-right tabular-nums text-green-700 font-medium">{r.totals.actioned}{r.totals.overridden ? <span className="text-amber-600 font-normal"> ({r.totals.overridden} ovr)</span> : null}</td>
+                    <td className={`px-2 text-right tabular-nums ${rate >= 50 ? 'text-green-700' : rate >= 20 ? 'text-gray-700' : 'text-gray-400'}`}>{rate}%</td>
+                    <td className="px-2 text-right tabular-nums text-red-600">{r.totals.rejected || ''}</td>
+                    <td className="px-2 text-right tabular-nums text-gray-500">{r.totals.pending || ''}</td>
+                    <td className="px-2">
+                      <span className="inline-flex gap-1 flex-wrap">
+                        {BUCKET_ORDER.filter((b) => r.buckets[b]?.suggested).map((b) => {
+                          const v = r.buckets[b]!;
+                          return (
+                            <span key={b} className={`text-[10px] px-1.5 py-0.5 rounded-full ${bucketActive(b)}`} title={`${BUCKET_LABEL[b]}: ${v.actioned} actioned of ${v.suggested} suggested · ${v.rejected} rejected · ${v.pending} pending`}>
+                              {BUCKET_LABEL[b]} {v.actioned}/{v.suggested}
+                            </span>
+                          );
+                        })}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot className="border-t">
+              <tr className="text-xs font-medium bg-gray-50">
+                <td colSpan={6} className="py-1.5 px-2 text-gray-600">{rows.length}-run total</td>
+                <td className="px-2 text-right tabular-nums">{totalSug}</td>
+                <td className="px-2 text-right tabular-nums text-green-700">{totalAct}</td>
+                <td className={`px-2 text-right tabular-nums ${totalSug ? (totalAct / totalSug >= 0.5 ? 'text-green-700' : totalAct / totalSug >= 0.2 ? 'text-gray-700' : 'text-gray-400') : 'text-gray-400'}`}>{totalSug ? Math.round((totalAct / totalSug) * 100) : 0}%</td>
+                <td className="px-2 text-right tabular-nums text-red-600">{totalRej || ''}</td>
+                <td className="px-2 text-right tabular-nums text-gray-500">{totalPen || ''}</td>
+                <td></td>
+              </tr>
+            </tfoot>
+          </table>
+          <p className="text-[11px] text-gray-400 mt-2">
+            Actioned = accepted + overridden + executed. Click a row to load that run's recommendations below. Counts use the adaptive engine source only — the rules-mirror source isn't double-counted here.
+          </p>
+        </>
       )}
     </div>
   );

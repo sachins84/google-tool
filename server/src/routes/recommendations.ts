@@ -213,6 +213,79 @@ export async function recommendationRoutes(app: FastifyInstance): Promise<void> 
     return { date: latest.d, window: q.data.window, run_window_days: windowDays, mix, halo_rules: Object.entries(halo).map(([channel, value]) => ({ channel, value })) };
   });
 
+  // Per-run rollup: one row per (brand, run_date) with totals + per-bucket
+  // suggested-vs-actioned. Drives the "Run history" panel on the Actions tab
+  // so operators can see, day-by-day, how many suggestions the optimizer made
+  // and how many landed as real changes.
+  app.get('/runs', async (req, reply) => {
+    const q = z.object({ brand_id: z.coerce.number(), days: z.coerce.number().min(1).max(180).default(30) }).safeParse(req.query);
+    if (!q.success) return reply.code(400).send({ error: q.error.flatten() });
+    const db = getDb();
+
+    const runs = db.prepare(
+      `SELECT id, run_date, trigger, status, started_at, finished_at,
+              current_blended_roas, portfolio_target_roas, projected_blended_roas,
+              target_reachable, eval_window_days, notes
+       FROM recommendation_runs
+       WHERE brand_id = ? AND run_date >= date('now', ?)
+       ORDER BY run_date DESC`
+    ).all(q.data.brand_id, `-${q.data.days} days`) as Array<{
+      id: number; run_date: string; trigger: string; status: string;
+      started_at: number | null; finished_at: number | null;
+      current_blended_roas: number | null; portfolio_target_roas: number | null;
+      projected_blended_roas: number | null; target_reachable: number | null;
+      eval_window_days: number | null; notes: string | null;
+    }>;
+    if (runs.length === 0) return { runs: [] };
+
+    // Bucket breakdown per run. source='engine' to avoid double-counting the
+    // rules mirror — same convention as /summary. COALESCE(bucket,'hold')
+    // catches older recs whose bucket wasn't set when the column was added.
+    const placeholders = runs.map(() => '?').join(',');
+    const bucketRows = db.prepare(
+      `SELECT run_id, COALESCE(bucket,'hold') AS bucket,
+              COUNT(*) AS suggested,
+              SUM(CASE WHEN status IN ('accepted','overridden','executed') THEN 1 ELSE 0 END) AS actioned,
+              SUM(CASE WHEN status='executed' THEN 1 ELSE 0 END) AS executed,
+              SUM(CASE WHEN status='rejected' THEN 1 ELSE 0 END) AS rejected,
+              SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS pending,
+              SUM(CASE WHEN status='overridden' THEN 1 ELSE 0 END) AS overridden
+       FROM recommendations
+       WHERE source='engine' AND run_id IN (${placeholders})
+       GROUP BY run_id, COALESCE(bucket,'hold')`
+    ).all(...runs.map((r) => r.id)) as Array<{
+      run_id: number; bucket: string; suggested: number; actioned: number;
+      executed: number; rejected: number; pending: number; overridden: number;
+    }>;
+
+    const byRun = new Map<number, Record<string, { suggested: number; actioned: number; executed: number; rejected: number; pending: number; overridden: number }>>();
+    for (const b of bucketRows) {
+      const m = byRun.get(b.run_id) ?? {};
+      m[b.bucket] = { suggested: b.suggested, actioned: b.actioned, executed: b.executed, rejected: b.rejected, pending: b.pending, overridden: b.overridden };
+      byRun.set(b.run_id, m);
+    }
+
+    return {
+      runs: runs.map((r) => {
+        const buckets = byRun.get(r.id) ?? {};
+        const totals = Object.values(buckets).reduce(
+          (s, x) => ({ suggested: s.suggested + x.suggested, actioned: s.actioned + x.actioned, executed: s.executed + x.executed, rejected: s.rejected + x.rejected, pending: s.pending + x.pending, overridden: s.overridden + x.overridden }),
+          { suggested: 0, actioned: 0, executed: 0, rejected: 0, pending: 0, overridden: 0 }
+        );
+        return {
+          run_id: r.id, run_date: r.run_date, trigger: r.trigger, status: r.status,
+          started_at: r.started_at, finished_at: r.finished_at,
+          eval_window_days: r.eval_window_days, notes: r.notes,
+          current_blended_roas: r.current_blended_roas,
+          portfolio_target_roas: r.portfolio_target_roas,
+          projected_blended_roas: r.projected_blended_roas,
+          target_reachable: r.target_reachable == null ? null : Boolean(r.target_reachable),
+          totals, buckets,
+        };
+      }),
+    };
+  });
+
   // Daily suggestions-vs-actions check, grouped by bucket + level.
   app.get('/summary', async (req, reply) => {
     const q = z.object({ brand_id: z.coerce.number(), days: z.coerce.number().min(1).max(90).default(30) }).safeParse(req.query);

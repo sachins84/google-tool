@@ -333,6 +333,20 @@ export const api = {
     ),
   recommendationAddComment: (id: number, comment: string) =>
     request<{ ok: true }>(`/api/recommendations/${id}/comments`, { method: 'POST', body: JSON.stringify({ comment }) }),
+  recommendationRuns: (brandId: number, days = 30) =>
+    request<{
+      runs: Array<{
+        run_id: number; run_date: string; trigger: string; status: string;
+        started_at: number | null; finished_at: number | null;
+        eval_window_days: number | null; notes: string | null;
+        current_blended_roas: number | null;
+        portfolio_target_roas: number | null;
+        projected_blended_roas: number | null;
+        target_reachable: boolean | null;
+        totals: { suggested: number; actioned: number; executed: number; rejected: number; pending: number; overridden: number };
+        buckets: Record<string, { suggested: number; actioned: number; executed: number; rejected: number; pending: number; overridden: number }>;
+      }>;
+    }>(`/api/recommendations/runs?brand_id=${brandId}&days=${days}`),
   recommendationSummary: (brandId: number, days = 30) =>
     request<{ summary: Array<{ run_date: string; bucket: string; level: string; suggested: number; actioned: number; rejected: number; pending: number }> }>(
       `/api/recommendations/summary?brand_id=${brandId}&days=${days}`
