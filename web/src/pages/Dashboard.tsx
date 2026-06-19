@@ -4,6 +4,7 @@ import { Performance } from './Performance';
 import { Settings } from './Settings';
 import { Audit } from './Audit';
 import { Insights } from './Insights';
+import { Daily } from './Daily';
 import { Actions } from './Actions';
 import { YoutubeUploader } from './YoutubeUploader';
 import { YoutubeAuth } from './YoutubeAuth';
@@ -82,6 +83,17 @@ export function Dashboard({ username, onLogout }: Props) {
             />
           ) : (
             <div className="text-sm text-gray-500 py-8 text-center">Select a brand above.</div>
+          )
+        ) : view === 'daily' ? (
+          state.brandId && state.from && state.to ? (
+            <Daily
+              brandId={state.brandId}
+              brandName={brands.find((b) => b.id === state.brandId)?.name ?? ''}
+              from={state.from}
+              to={state.to}
+            />
+          ) : (
+            <div className="text-sm text-gray-500 py-8 text-center">Select a brand and date range above.</div>
           )
         ) : view === 'insights' ? (
           state.brandId && state.from && state.to ? (

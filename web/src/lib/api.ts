@@ -281,6 +281,21 @@ export const api = {
   ytAuthDisconnect: (id: number) =>
     request<{ ok: true }>(`/api/youtube/auth/channels/${id}`, { method: 'DELETE' }),
 
+  daily: (brandId: number, from: string, to: string) =>
+    request<{
+      rows: Array<{
+        date: string;
+        cost: number; impressions: number; clicks: number;
+        conversions: number; conversions_value: number;
+        conversions_post_rto: number; conversions_value_post_rto: number;
+        ncs: number; ncs_amount: number; aov: number;
+        calc_roas: number; calc_cpa: number;
+        google_roas: number; google_cpa: number;
+        ctr: number; cpc: number;
+      }>;
+      rto_factor: number;
+    }>(`/api/daily?brand_id=${brandId}&from=${from}&to=${to}`),
+
   // ── Recommender ──────────────────────────────────────────────────────
   recommendations: (brandId: number, runDate?: string) => {
     const qs = new URLSearchParams({ brand_id: String(brandId) });

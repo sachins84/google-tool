@@ -110,6 +110,29 @@ export async function fetchByCampaign(opts: FetchOptions): Promise<FunnelMetrics
   }
 }
 
+/** Fetch per-day brand-wide aggregates — used by the Daily view. */
+export async function fetchDaily(opts: FetchOptions): Promise<Array<{ date: string; ncs: number; amount: number }>> {
+  const client = await getPool().connect();
+  try {
+    const { sql: srcSql, params: srcParams } = utmSourceClause(opts.utmSourceList, 3);
+    const sql = `
+      SELECT
+        dt::text                                                                 AS date,
+        SUM(converted)::BIGINT                                                   AS ncs,
+        SUM(COALESCE(converted_amount, 0))::FLOAT                                AS amount
+      FROM ${opts.funnelTable}
+      WHERE dt BETWEEN $1 AND $2
+        AND ${srcSql}
+      GROUP BY dt
+      ORDER BY dt
+    `;
+    const r = await client.query(sql, [opts.dateFrom, opts.dateTo, ...srcParams]);
+    return r.rows.map((x) => ({ date: String(x.date), ncs: Number(x.ncs ?? 0), amount: Number(x.amount ?? 0) }));
+  } finally {
+    client.release();
+  }
+}
+
 /** Fetch a single brand-wide total (no grouping). */
 export async function fetchTotal(opts: FetchOptions): Promise<FunnelMetricsTotal> {
   const client = await getPool().connect();

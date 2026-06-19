@@ -23,6 +23,7 @@ import { youtubeRoutes } from './routes/youtube.js';
 import { youtubeAuthRoutes } from './routes/youtube-auth.js';
 import { recommendationRoutes } from './routes/recommendations.js';
 import { ruleRoutes } from './routes/rules.js';
+import { dailyRoutes } from './routes/daily.js';
 import { startRecommenderScheduler } from './services/recommender/scheduler.js';
 
 async function main(): Promise<void> {
@@ -57,6 +58,7 @@ async function main(): Promise<void> {
   await app.register(youtubeAuthRoutes, { prefix: '/api/youtube/auth' });
   await app.register(recommendationRoutes, { prefix: '/api/recommendations' });
   await app.register(ruleRoutes, { prefix: '/api/rules' });
+  await app.register(dailyRoutes, { prefix: '/api/daily' });
 
   // MCP server — public (or token-gated via MCP_SECRET). Mounted outside /api/* so
   // it bypasses the session-cookie auth middleware.
