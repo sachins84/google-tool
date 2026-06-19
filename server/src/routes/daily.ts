@@ -198,6 +198,33 @@ async function buildCampaignPivot(
     }
   }));
 
+  // Pull the un-segmented list of every non-removed campaign too — so a
+  // paused / zero-activity campaign that received late-attribution NCs via
+  // its numeric utm_campaign still resolves into knownCampaignIds and lands
+  // on its own row (same set the Campaigns tab works with). Without this the
+  // daily totals drift from the Campaigns tab on those edge-case campaigns.
+  await Promise.all(brand.accounts.map(async (acc) => {
+    const loginCustomerId = (await getLoginCustomerId(acc.customer_id)) ?? undefined;
+    try {
+      const rows = await search<{ campaign?: { id?: string; name?: string; status?: string; advertisingChannelType?: string } }>({
+        customerId: acc.customer_id, loginCustomerId,
+        query: `SELECT campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type
+                FROM campaign WHERE campaign.status != 'REMOVED'`,
+      });
+      for (const r of rows) {
+        const id = r.campaign?.id; if (!id) continue;
+        const cid = cidOf(acc.customer_id, id);
+        if (campMeta.has(cid)) continue;
+        campMeta.set(cid, {
+          name: r.campaign?.name ?? '', channel_type: r.campaign?.advertisingChannelType ?? '',
+          status: r.campaign?.status ?? '', customer_id: acc.customer_id, campaign_id: id,
+        });
+      }
+    } catch (err) {
+      app.log.warn({ customer_id: acc.customer_id, err: err instanceof Error ? err.message : String(err) }, 'daily un-segmented campaign-list fetch failed');
+    }
+  }));
+
   // Window-level activeCampaignIds (cost > 0 anywhere in window). Used to gate
   // the asset-group equal-split — same rule as the Campaigns tab.
   const activeCampaignIds = new Set<string>();
