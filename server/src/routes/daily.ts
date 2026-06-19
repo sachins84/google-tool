@@ -4,8 +4,9 @@ import { requireAuth } from '../middleware/auth.js';
 import { getBrand } from '../services/brands.js';
 import { search } from '../services/google-ads.js';
 import { getLoginCustomerId } from '../services/mcc-map.js';
-import { fetchDaily } from '../services/redshift.js';
+import { fetchDaily, fetchByCampaignDaily } from '../services/redshift.js';
 import { getDb } from '../db/init.js';
+import { buildAdIdToCampaignIdMap, buildSkuToCampaignIdMap, buildAssetGroupNameToCampaignIdMap } from './performance.js';
 
 /**
  * Per-day brand-wide summary. Spend / conversions come from Google Ads
@@ -141,24 +142,25 @@ export async function dailyRoutes(app: FastifyInstance): Promise<void> {
 }
 
 /**
- * Pivot mode: rows = campaigns, columns = dates, cells = per-(campaign, date)
- * Spend / NCs / amount. Spend from Google Ads is exact; NCs are distributed
- * inside each day proportionally to that campaign's share of the day's brand
- * spend so per-day column totals match the brand-daily Redshift truth. This
- * approximation reuses the brand-level RTO factor and avoids re-running the
- * full per-day attribution pipeline (asset-group equal-split, alias map, etc.)
- * — accurate to within a few % in the common case and reconciles to the
- * brand-daily view by construction.
+ * Pivot mode: rows = campaigns, dates = columns. Per-(date, campaign) NCs are
+ * produced by applying the SAME utm_campaign attribution the Campaigns tab uses
+ * (numeric → campaign_id, SKU → Shopping, asset-group name → equal-split among
+ * active siblings, byName fallback) — but at daily granularity. So each cell's
+ * Calc-ROAS reflects that campaign's actual ROAS on that day, not a spend-share
+ * approximation.
+ *
+ * Unattributable per-(date) NCs (null utm_campaign, paused-only siblings, etc.)
+ * flow into a per-date "Other" pseudo-campaign row so totals still reconcile.
  */
 async function buildCampaignPivot(
   brand: NonNullable<ReturnType<typeof getBrand>>, from: string, to: string, app: { log: { warn: (...a: unknown[]) => void } }
 ): Promise<{ rows: PivotRow[]; dates: string[]; rto_factor: number; brand_daily: BrandDailyTotal[] }> {
-  // 1) Per-(campaign, date) spend + Google-conversions from Google Ads.
-  interface CampMeta { name: string; channel_type: string; status: string }
+  // 1) Per-(customer|campaign, date) Google-Ads cost / conversions.
+  interface CampMeta { name: string; channel_type: string; status: string; customer_id: string; campaign_id: string }
   const campMeta = new Map<string, CampMeta>();
-  // key: customer_id|campaign_id|date → cell
   const cellByKey = new Map<string, { cost: number; conv: number; convVal: number; impr: number; clicks: number }>();
   const cidOf = (customer: string, campaign: string): string => `${customer}|${campaign}`;
+  const accountIds = brand.accounts.map((a) => a.customer_id);
   await Promise.all(brand.accounts.map(async (acc) => {
     const loginCustomerId = (await getLoginCustomerId(acc.customer_id)) ?? undefined;
     try {
@@ -179,7 +181,8 @@ async function buildCampaignPivot(
         if (!id || !d) continue;
         const cid = cidOf(acc.customer_id, id);
         if (!campMeta.has(cid)) campMeta.set(cid, {
-          name: r.campaign?.name ?? '', channel_type: r.campaign?.advertisingChannelType ?? '', status: r.campaign?.status ?? '',
+          name: r.campaign?.name ?? '', channel_type: r.campaign?.advertisingChannelType ?? '',
+          status: r.campaign?.status ?? '', customer_id: acc.customer_id, campaign_id: id,
         });
         const k = `${cid}|${d}`;
         const cur = cellByKey.get(k) ?? { cost: 0, conv: 0, convVal: 0, impr: 0, clicks: 0 };
@@ -195,67 +198,152 @@ async function buildCampaignPivot(
     }
   }));
 
-  // 2) Brand daily NCs / amount from Redshift (pre-RTO; we'll apply factor below).
-  const brandDailyMap = new Map<string, { ncs: number; amount: number }>();
-  if (brand.rto_mode === 'redshift') {
-    const cfg = getDb()
-      .prepare('SELECT funnel_table, utm_source_list, enabled FROM brand_redshift_config WHERE brand_id = ?')
-      .get(brand.id) as { funnel_table: string | null; utm_source_list: string | null; enabled: number } | undefined;
-    if (cfg?.enabled && cfg.funnel_table) {
-      let utmSourceList: string[] = [];
-      try { utmSourceList = JSON.parse(cfg.utm_source_list ?? '[]'); } catch { /* ignore */ }
-      if (utmSourceList.length) {
-        try {
-          const rs = await fetchDaily({ funnelTable: cfg.funnel_table, utmSourceList, dateFrom: from, dateTo: to });
-          for (const r of rs) brandDailyMap.set(r.date, { ncs: r.ncs, amount: r.amount });
-        } catch (err) {
-          app.log.warn({ err: err instanceof Error ? err.message : String(err) }, 'daily Redshift fetch failed');
-        }
-      }
+  // Window-level activeCampaignIds (cost > 0 anywhere in window). Used to gate
+  // the asset-group equal-split — same rule as the Campaigns tab.
+  const activeCampaignIds = new Set<string>();
+  const knownCampaignIds = new Set<string>();
+  // name → campaign_id lookups (used by the byName fallback). Built from campMeta.
+  const nameToCampaignId = new Map<string, string>();
+  const normNameToCampaignId = new Map<string, string>();
+  const normalize = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, '');
+  for (const [cid, meta] of campMeta) {
+    knownCampaignIds.add(meta.campaign_id);
+    if (meta.name) {
+      nameToCampaignId.set(meta.name.toLowerCase(), meta.campaign_id);
+      normNameToCampaignId.set(normalize(meta.name), meta.campaign_id);
+    }
+    // Sum cost across all dates for this campaign — if any > 0 it's active.
+    for (const date of new Set([...cellByKey.keys()].filter((k) => k.startsWith(`${cid}|`)).map((k) => k.split('|').slice(2).join('|')))) {
+      const cell = cellByKey.get(`${cid}|${date}`);
+      if ((cell?.cost ?? 0) > 0) { activeCampaignIds.add(meta.campaign_id); break; }
     }
   }
 
-  // 3) Compute total brand spend per date (denominator for share-of-day).
-  const brandDaySpend = new Map<string, number>();
-  for (const [key, cell] of cellByKey) {
-    const date = key.split('|').slice(2).join('|'); // safe even if names contained '|'
-    brandDaySpend.set(date, (brandDaySpend.get(date) ?? 0) + cell.cost);
+  // 2) Brand-daily totals + per-(date, utm_campaign) Redshift rows + the three
+  //    attribution maps from Google Ads, all in parallel.
+  const cfg = getDb()
+    .prepare('SELECT funnel_table, utm_source_list, utm_campaign_aliases, enabled FROM brand_redshift_config WHERE brand_id = ?')
+    .get(brand.id) as { funnel_table: string | null; utm_source_list: string | null; utm_campaign_aliases: string | null; enabled: number } | undefined;
+  let utmSourceList: string[] = [];
+  try { utmSourceList = JSON.parse(cfg?.utm_source_list ?? '[]'); } catch { /* ignore */ }
+  let aliases: Record<string, string> = {};
+  try {
+    const raw = JSON.parse(cfg?.utm_campaign_aliases ?? '{}');
+    if (raw && typeof raw === 'object') {
+      aliases = Object.fromEntries(Object.entries(raw).map(([k, v]) => [String(k).toLowerCase(), String(v)]));
+    }
+  } catch { /* ignore */ }
+
+  const brandDailyMap = new Map<string, { ncs: number; amount: number }>();
+  // (date, utm_source, utm_campaign) Redshift rows
+  let dailyRs: Array<{ date: string; utm_source: string; utm_campaign: string; ncs: number; amount: number }> = [];
+  // attribution maps
+  let adIdToCampaignId = new Map<string, string>();
+  let skuToCampaignId = new Map<string, string>();
+  let agNameToCampaignId = new Map<string, string[]>();
+  if (brand.rto_mode === 'redshift' && cfg?.enabled && cfg.funnel_table && utmSourceList.length) {
+    try {
+      const [brandDaily, perDayRs, adMap, skuMap, agMap] = await Promise.all([
+        fetchDaily({ funnelTable: cfg.funnel_table, utmSourceList, dateFrom: from, dateTo: to }),
+        fetchByCampaignDaily({ funnelTable: cfg.funnel_table, utmSourceList, dateFrom: from, dateTo: to }),
+        buildAdIdToCampaignIdMap(accountIds),
+        buildSkuToCampaignIdMap(accountIds, from, to),
+        buildAssetGroupNameToCampaignIdMap(accountIds, from, to),
+      ]);
+      for (const r of brandDaily) brandDailyMap.set(r.date, { ncs: r.ncs, amount: r.amount });
+      dailyRs = perDayRs;
+      adIdToCampaignId = adMap; skuToCampaignId = skuMap; agNameToCampaignId = agMap;
+    } catch (err) {
+      app.log.warn({ err: err instanceof Error ? err.message : String(err) }, 'daily Redshift / attribution fetch failed');
+    }
   }
 
-  // 4) Build sorted date list (every date that has either spend or NCs).
+  // 3) Apply real attribution per-(date, utm_campaign) row. Bucket NCs by
+  //    (campaign_id, date). Mirror mergeRedshiftMetrics rules exactly.
+  // ncsByCampaignDate[campaign_id][date] = { ncs, amount }
+  const ncsByCampaignDate = new Map<string, Map<string, { ncs: number; amount: number }>>();
+  // unattributed → ncsByOtherDate[utm_source][date] (for "Other Channel" rows)
+  const otherByDate = new Map<string, Map<string, { ncs: number; amount: number; samples: string[] }>>();
+  const addToCampaignDate = (campaignId: string, date: string, ncs: number, amount: number): void => {
+    let byDate = ncsByCampaignDate.get(campaignId);
+    if (!byDate) { byDate = new Map(); ncsByCampaignDate.set(campaignId, byDate); }
+    const prev = byDate.get(date) ?? { ncs: 0, amount: 0 };
+    byDate.set(date, { ncs: prev.ncs + ncs, amount: prev.amount + amount });
+  };
+  const addToOther = (source: string, date: string, ncs: number, amount: number, sample: string): void => {
+    let byDate = otherByDate.get(source);
+    if (!byDate) { byDate = new Map(); otherByDate.set(source, byDate); }
+    const prev = byDate.get(date) ?? { ncs: 0, amount: 0, samples: [] };
+    if (prev.samples.length < 5 && sample && !prev.samples.includes(sample)) prev.samples.push(sample);
+    byDate.set(date, { ncs: prev.ncs + ncs, amount: prev.amount + amount, samples: prev.samples });
+  };
+
+  for (const r of dailyRs) {
+    if (/^\d+$/.test(r.utm_campaign)) {
+      const target = adIdToCampaignId.get(r.utm_campaign) ?? r.utm_campaign;
+      if (knownCampaignIds.has(target)) { addToCampaignDate(target, r.date, r.ncs, r.amount); continue; }
+      addToOther(r.utm_source, r.date, r.ncs, r.amount, r.utm_campaign); continue;
+    }
+    const aliased = aliases[r.utm_campaign.toLowerCase()] ?? r.utm_campaign;
+    const lcKey = aliased.toLowerCase();
+    const normKey = normalize(aliased);
+    // 1) SKU → Shopping
+    const skuTarget = skuToCampaignId.get(lcKey);
+    if (skuTarget && knownCampaignIds.has(skuTarget)) { addToCampaignDate(skuTarget, r.date, r.ncs, r.amount); continue; }
+    // 2) asset_group name → equal split across ACTIVE siblings
+    const agTargets = agNameToCampaignId.get(lcKey) ?? agNameToCampaignId.get(normKey);
+    if (agTargets && agTargets.length) {
+      const active = agTargets.filter((cid) => activeCampaignIds.has(cid));
+      if (active.length) {
+        const share = { ncs: r.ncs / active.length, amount: r.amount / active.length };
+        for (const cid of active) addToCampaignDate(cid, r.date, share.ncs, share.amount);
+        continue;
+      }
+      // All paused → unattributed
+      addToOther(r.utm_source, r.date, r.ncs, r.amount, r.utm_campaign); continue;
+    }
+    // 3) byName fuzzy → matching campaign
+    const nameTarget = nameToCampaignId.get(lcKey) ?? normNameToCampaignId.get(normKey);
+    if (nameTarget) { addToCampaignDate(nameTarget, r.date, r.ncs, r.amount); continue; }
+    // 4) nothing matched
+    addToOther(r.utm_source, r.date, r.ncs, r.amount, r.utm_campaign);
+  }
+
+  // 4) Build the date list + per-day brand spend (for footer reconciliation).
+  const brandDaySpend = new Map<string, number>();
+  for (const [key, cell] of cellByKey) {
+    const date = key.split('|').slice(2).join('|');
+    brandDaySpend.set(date, (brandDaySpend.get(date) ?? 0) + cell.cost);
+  }
   const dates = [...new Set<string>([...brandDaySpend.keys(), ...brandDailyMap.keys()])].sort();
 
-  // 5) For each campaign × date, compute cell with RTO-adjusted distributed NCs.
+  // 5) Compose per-campaign rows with cells built from REAL attribution.
   const rtoMul = Math.max(0, Math.min(1, 1 - (brand.rto_factor ?? 0)));
   const rows: PivotRow[] = [];
   for (const [cid, meta] of campMeta) {
+    const ncsForCamp = ncsByCampaignDate.get(meta.campaign_id);
     const byDate: Record<string, PivotCell> = {};
     let tCost = 0, tConv = 0, tConvVal = 0, tImpr = 0, tClicks = 0, tNcs = 0, tAmt = 0;
     for (const date of dates) {
       const cell = cellByKey.get(`${cid}|${date}`);
       const cost = cell?.cost ?? 0;
-      const dayBrandCost = brandDaySpend.get(date) ?? 0;
-      const dayBrand = brandDailyMap.get(date) ?? { ncs: 0, amount: 0 };
-      // Share-of-day-spend allocation. Zero-spend days for this campaign → no NCs.
-      const share = dayBrandCost > 0 ? cost / dayBrandCost : 0;
-      const ncs = dayBrand.ncs * share * rtoMul;
-      const amount = dayBrand.amount * share * rtoMul;
+      const dayNcs = (ncsForCamp?.get(date)?.ncs ?? 0) * rtoMul;
+      const dayAmt = (ncsForCamp?.get(date)?.amount ?? 0) * rtoMul;
       const convPR = (cell?.conv ?? 0) * rtoMul;
       const convValPR = (cell?.convVal ?? 0) * rtoMul;
       byDate[date] = {
-        cost, ncs, amount,
+        cost, ncs: dayNcs, amount: dayAmt,
         google_roas: cost > 0 ? convValPR / cost : 0,
-        calc_roas: cost > 0 ? amount / cost : 0,
-        calc_cpa: ncs > 0 ? cost / ncs : 0,
+        calc_roas: cost > 0 ? dayAmt / cost : 0,
+        calc_cpa: dayNcs > 0 ? cost / dayNcs : 0,
         conversions_post_rto: convPR,
       };
       tCost += cost; tConv += cell?.conv ?? 0; tConvVal += cell?.convVal ?? 0;
       tImpr += cell?.impr ?? 0; tClicks += cell?.clicks ?? 0;
-      tNcs += ncs; tAmt += amount;
+      tNcs += dayNcs; tAmt += dayAmt;
     }
-    const [customer_id, campaign_id] = cid.split('|');
     rows.push({
-      customer_id: customer_id ?? '', campaign_id: campaign_id ?? '',
+      customer_id: meta.customer_id, campaign_id: meta.campaign_id,
       campaign_name: meta.name, channel_type: meta.channel_type, status: meta.status,
       by_date: byDate,
       totals: {
@@ -269,10 +357,53 @@ async function buildCampaignPivot(
       },
     });
   }
-  // Sort campaigns by total spend desc (most-impactful first).
+
+  // 5b) Synthetic "Other [channel]" pseudo-rows per utm_source → channel.
+  for (const [source, byDate] of otherByDate) {
+    const channelType = source.toLowerCase().includes('pmax') ? 'PERFORMANCE_MAX'
+      : source.toLowerCase().includes('search') ? 'SEARCH'
+      : source.toLowerCase().includes('pla') ? 'SHOPPING'
+      : source.toLowerCase().includes('dg') || source.toLowerCase().includes('demand') ? 'DEMAND_GEN'
+      : 'OTHER';
+    const label = channelType === 'PERFORMANCE_MAX' ? 'Other PMax'
+      : channelType === 'SEARCH' ? 'Other Search'
+      : channelType === 'SHOPPING' ? 'Other Shopping'
+      : channelType === 'DEMAND_GEN' ? 'Other Demand Gen'
+      : `Other (${source})`;
+    const cellsByDate: Record<string, PivotCell> = {};
+    let tNcs = 0, tAmt = 0;
+    let samplesUnion: string[] = [];
+    for (const date of dates) {
+      const entry = byDate.get(date);
+      const ncs = (entry?.ncs ?? 0) * rtoMul;
+      const amount = (entry?.amount ?? 0) * rtoMul;
+      cellsByDate[date] = {
+        cost: 0, ncs, amount,
+        google_roas: 0, calc_roas: 0, calc_cpa: 0, conversions_post_rto: 0,
+      };
+      tNcs += ncs; tAmt += amount;
+      if (entry?.samples) for (const s of entry.samples) if (!samplesUnion.includes(s) && samplesUnion.length < 5) samplesUnion.push(s);
+    }
+    if (tNcs > 0 || tAmt > 0) {
+      rows.push({
+        customer_id: '', campaign_id: `__synthetic_${source}`,
+        campaign_name: label + (samplesUnion.length ? ` · samples: ${samplesUnion.join(', ')}` : ''),
+        channel_type: channelType, status: 'SYNTHETIC',
+        by_date: cellsByDate,
+        totals: {
+          cost: 0, ncs: tNcs, amount: tAmt,
+          aov: tNcs > 0 ? tAmt / tNcs : 0,
+          calc_roas: 0, calc_cpa: 0, google_roas: 0,
+          conversions_post_rto: 0, impressions: 0, clicks: 0,
+        },
+      });
+    }
+  }
+
+  // Sort campaigns by total spend desc; "Other" synthetics fall to the bottom
+  // (zero cost) where they belong.
   rows.sort((a, b) => b.totals.cost - a.totals.cost);
 
-  // 6) Brand-daily summary array (column footer; reconciles to the brand-mode view).
   const brand_daily: BrandDailyTotal[] = dates.map((date) => {
     const dayBrand = brandDailyMap.get(date) ?? { ncs: 0, amount: 0 };
     const cost = brandDaySpend.get(date) ?? 0;

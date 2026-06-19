@@ -695,7 +695,7 @@ function buildOtherRow(utmSource: string, ncs: number, amount: number, samples: 
  * Indexed by both lowercase and alphanumeric-normalized name so tracking
  * templates that use 'brain_gummies' resolve to asset group 'Brain Gummies'.
  */
-async function buildAssetGroupNameToCampaignIdMap(
+export async function buildAssetGroupNameToCampaignIdMap(
   customerIds: string[],
   _from: string,
   _to: string
@@ -755,7 +755,7 @@ async function buildAssetGroupNameToCampaignIdMap(
  * If a SKU runs in multiple Shopping campaigns, picks the highest-spend one
  * deterministically (sufficient for v1; weighted attribution can come later).
  */
-async function buildSkuToCampaignIdMap(
+export async function buildSkuToCampaignIdMap(
   customerIds: string[],
   from: string,
   to: string
@@ -813,7 +813,7 @@ async function buildSkuToCampaignIdMap(
  * Used to resolve utm_campaign values that are actually ad IDs (Search campaigns using
  * the {creative} macro in their tracking template).
  */
-async function buildAdIdToCampaignIdMap(customerIds: string[]): Promise<Map<string, string>> {
+export async function buildAdIdToCampaignIdMap(customerIds: string[]): Promise<Map<string, string>> {
   if (!customerIds.length) return new Map();
   const query = `SELECT campaign.id, ad_group_ad.ad.id FROM ad_group_ad WHERE ad_group_ad.status != 'REMOVED'`;
   const perAccount = await Promise.all(

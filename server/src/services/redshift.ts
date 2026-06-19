@@ -110,6 +110,41 @@ export async function fetchByCampaign(opts: FetchOptions): Promise<FunnelMetrics
   }
 }
 
+/** Fetch per-(date, utm_source, utm_campaign) aggregates — used by the Daily
+ *  × Campaign pivot to apply real attribution per-day instead of distributing
+ *  brand-daily totals by spend share. */
+export async function fetchByCampaignDaily(opts: FetchOptions): Promise<Array<{
+  date: string; utm_source: string; utm_campaign: string; ncs: number; amount: number;
+}>> {
+  const client = await getPool().connect();
+  try {
+    const { sql: srcSql, params: srcParams } = utmSourceClause(opts.utmSourceList, 3);
+    const sql = `
+      SELECT
+        dt::text                                                                 AS date,
+        utm_source,
+        utm_campaign,
+        SUM(converted)::BIGINT                                                   AS ncs,
+        SUM(COALESCE(converted_amount, 0))::FLOAT                                AS amount
+      FROM ${opts.funnelTable}
+      WHERE dt BETWEEN $1 AND $2
+        AND ${srcSql}
+      GROUP BY dt, utm_source, utm_campaign
+      ORDER BY dt
+    `;
+    const r = await client.query(sql, [opts.dateFrom, opts.dateTo, ...srcParams]);
+    return r.rows.map((x) => ({
+      date: String(x.date),
+      utm_source: String(x.utm_source ?? ''),
+      utm_campaign: String(x.utm_campaign ?? ''),
+      ncs: Number(x.ncs ?? 0),
+      amount: Number(x.amount ?? 0),
+    }));
+  } finally {
+    client.release();
+  }
+}
+
 /** Fetch per-day brand-wide aggregates — used by the Daily view. */
 export async function fetchDaily(opts: FetchOptions): Promise<Array<{ date: string; ncs: number; amount: number }>> {
   const client = await getPool().connect();
