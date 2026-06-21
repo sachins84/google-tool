@@ -483,11 +483,12 @@ async function mergeRedshiftMetrics(rows: Row[], brandId: number, from: string, 
   //                       (e.g. 'Nutrimix-2', 'IBK') in their tracking template
   const brand = getBrand(brandId);
   const accountIds = brand?.accounts.map((a) => a.customer_id) ?? [];
-  const [dailyRs, adIdToCampaignId, skuToCampaignId, agNameToCampaignId, activeByDate] = await Promise.all([
+  const [dailyRs, adIdToCampaignId, skuToCampaignId, agNameToCampaignId, utmFinalUrlsMap, activeByDate] = await Promise.all([
     fetchByCampaignDaily({ funnelTable: cfg.funnel_table, utmSourceList, dateFrom: from, dateTo: to }),
     buildAdIdToCampaignIdMap(accountIds),
     buildSkuToCampaignIdMap(accountIds, from, to),
     buildAssetGroupNameToCampaignIdMap(accountIds, from, to),
+    buildUtmCampaignFromFinalUrlsMap(accountIds),
     buildActiveByDate(accountIds, from, to),
   ]);
 
@@ -543,6 +544,24 @@ async function mergeRedshiftMetrics(rows: Row[], brandId: number, from: string, 
       consumed.add(rsKey(r.utm_source, r.utm_campaign));
       continue;
     }
+    // Authoritative map: utm_campaign value extracted from each PMax campaign's
+    // asset_group.final_urls. This is Google's own record of "which campaigns
+    // bake this utm_campaign string into their click URLs" — preferred over
+    // fuzzy asset-group-NAME matching. Filter to campaigns active that date.
+    const finalUrlTargets = utmFinalUrlsMap.get(lcKey) ?? utmFinalUrlsMap.get(normKey);
+    if (finalUrlTargets && finalUrlTargets.length) {
+      const activeToday = activeByDate.get(r.date) ?? new Set<string>();
+      const active = finalUrlTargets.filter((cid) => activeToday.has(cid) && knownCampaignIds.has(cid));
+      if (active.length) {
+        const share = { ncs: r.ncs / active.length, amount: r.amount / active.length };
+        for (const cid of active) add(byId, cid, share);
+        consumed.add(rsKey(r.utm_source, r.utm_campaign));
+        continue;
+      }
+      // If none of the canonical owners are active that day, fall through to
+      // asset-group-name matching (less reliable) — and if THAT also has no
+      // active sibling that day, the NC lands in synthetic "Other".
+    }
     const agTargets = agNameToCampaignId.get(lcKey) ?? agNameToCampaignId.get(normKey);
     if (agTargets && agTargets.length) {
       // Per-date active gate: include a campaign in the 1/N split only if it
@@ -580,6 +599,7 @@ async function mergeRedshiftMetrics(rows: Row[], brandId: number, from: string, 
     const lcKey = aliasedCampaign.toLowerCase();
     const normKey = normalize(aliasedCampaign);
     if (skuToCampaignId.has(lcKey)) continue;                    // SKU handled inline
+    if (utmFinalUrlsMap.has(lcKey) || utmFinalUrlsMap.has(normKey)) continue; // final_urls handled inline
     const agTargets = agNameToCampaignId.get(lcKey) ?? agNameToCampaignId.get(normKey);
     if (agTargets && agTargets.length) continue;                 // asset-group handled inline
     if (realNames.has(lcKey) || realNormNames.has(normKey)) {
@@ -681,6 +701,72 @@ function buildOtherRow(utmSource: string, ncs: number, amount: number, samples: 
  * Indexed by both lowercase and alphanumeric-normalized name so tracking
  * templates that use 'brain_gummies' resolve to asset group 'Brain Gummies'.
  */
+/**
+ * Build {utm_campaign-value → Set<campaign_id>} by parsing every PMax
+ * asset_group's final_urls for `utm_campaign=X` tokens. This is Google Ads's
+ * own record of which utm_campaign string ends up in click URLs for which
+ * campaign — far more reliable than fuzzy asset-group-name matching.
+ *
+ * Why: when a PMax campaign's tracking template puts both
+ *     utm_campaign=Calcium_Gummies   (from asset_group.final_urls)
+ *     utm_campaign={campaignid}      (from campaign.tracking_url_template)
+ * into the click URL, Magento's parser can pick either value. The numeric
+ * form resolves directly via adIdToCampaignId; the named form previously
+ * leaked to "Other PMax" because the ENABLED-asset_group-name map didn't
+ * link "Calcium_Gummies" to the right campaign. This map closes that gap.
+ *
+ * Indexed by both lowercase and alphanumeric-normalized forms.
+ */
+export async function buildUtmCampaignFromFinalUrlsMap(
+  customerIds: string[]
+): Promise<Map<string, string[]>> {
+  if (!customerIds.length) return new Map();
+  const byUtm = new Map<string, Set<string>>();
+  const extract = (url: string): string[] => {
+    let s = url; try { s = decodeURIComponent(url); } catch { /* */ }
+    const out: string[] = [];
+    const re = /[?&]utm_campaign=([^&#]+)/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(s)) !== null) if (m[1] && !out.includes(m[1])) out.push(m[1]);
+    return out;
+  };
+  await Promise.all(customerIds.map(async (cid) => {
+    try {
+      const loginCustomerId = (await getLoginCustomerId(cid)) ?? undefined;
+      const rows = await search<{
+        campaign?: { id?: string };
+        assetGroup?: { finalUrls?: string[] };
+      }>({
+        customerId: cid, loginCustomerId,
+        query: `SELECT campaign.id, asset_group.final_urls
+                FROM asset_group
+                WHERE campaign.advertising_channel_type = 'PERFORMANCE_MAX'
+                  AND campaign.status != 'REMOVED'`,
+      });
+      for (const r of rows) {
+        const id = r.campaign?.id; if (!id) continue;
+        for (const url of r.assetGroup?.finalUrls ?? []) {
+          for (const v of extract(url)) {
+            const lc = v.toLowerCase();
+            let s = byUtm.get(lc); if (!s) { s = new Set(); byUtm.set(lc, s); }
+            s.add(id);
+          }
+        }
+      }
+    } catch (err) {
+      console.error(`[utm-final-urls] customer ${cid} failed:`, err instanceof Error ? err.message : String(err));
+    }
+  }));
+  const result = new Map<string, string[]>();
+  for (const [k, set] of byUtm) {
+    const ids = Array.from(set);
+    result.set(k, ids);
+    const norm = k.replace(/[^a-z0-9]+/g, '');
+    if (norm !== k && !result.has(norm)) result.set(norm, ids);
+  }
+  return result;
+}
+
 /**
  * Build a {date → Set<campaign_id>} index of campaigns that had cost > 0 on
  * each day in the window. Used by mergeRedshiftMetrics and buildCampaignPivot

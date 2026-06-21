@@ -6,7 +6,7 @@ import { search } from '../services/google-ads.js';
 import { getLoginCustomerId } from '../services/mcc-map.js';
 import { fetchDaily, fetchByCampaignDaily } from '../services/redshift.js';
 import { getDb } from '../db/init.js';
-import { buildAdIdToCampaignIdMap, buildSkuToCampaignIdMap, buildAssetGroupNameToCampaignIdMap } from './performance.js';
+import { buildAdIdToCampaignIdMap, buildSkuToCampaignIdMap, buildAssetGroupNameToCampaignIdMap, buildUtmCampaignFromFinalUrlsMap } from './performance.js';
 
 /**
  * Per-day brand-wide summary. Spend / conversions come from Google Ads
@@ -277,18 +277,20 @@ async function buildCampaignPivot(
   let adIdToCampaignId = new Map<string, string>();
   let skuToCampaignId = new Map<string, string>();
   let agNameToCampaignId = new Map<string, string[]>();
+  let utmFinalUrlsMap = new Map<string, string[]>();
   if (brand.rto_mode === 'redshift' && cfg?.enabled && cfg.funnel_table && utmSourceList.length) {
     try {
-      const [brandDaily, perDayRs, adMap, skuMap, agMap] = await Promise.all([
+      const [brandDaily, perDayRs, adMap, skuMap, agMap, finalMap] = await Promise.all([
         fetchDaily({ funnelTable: cfg.funnel_table, utmSourceList, dateFrom: from, dateTo: to }),
         fetchByCampaignDaily({ funnelTable: cfg.funnel_table, utmSourceList, dateFrom: from, dateTo: to }),
         buildAdIdToCampaignIdMap(accountIds),
         buildSkuToCampaignIdMap(accountIds, from, to),
         buildAssetGroupNameToCampaignIdMap(accountIds, from, to),
+        buildUtmCampaignFromFinalUrlsMap(accountIds),
       ]);
       for (const r of brandDaily) brandDailyMap.set(r.date, { ncs: r.ncs, amount: r.amount });
       dailyRs = perDayRs;
-      adIdToCampaignId = adMap; skuToCampaignId = skuMap; agNameToCampaignId = agMap;
+      adIdToCampaignId = adMap; skuToCampaignId = skuMap; agNameToCampaignId = agMap; utmFinalUrlsMap = finalMap;
     } catch (err) {
       app.log.warn({ err: err instanceof Error ? err.message : String(err) }, 'daily Redshift / attribution fetch failed');
     }
@@ -326,6 +328,21 @@ async function buildCampaignPivot(
     // 1) SKU → Shopping
     const skuTarget = skuToCampaignId.get(lcKey);
     if (skuTarget && knownCampaignIds.has(skuTarget)) { addToCampaignDate(skuTarget, r.date, r.ncs, r.amount); continue; }
+    // 1.5) utm_campaign value present in some campaign's asset_group.final_urls
+    //      → equal-split across campaigns active that date (the authoritative
+    //      map; preferred over fuzzy asset-group-NAME matching below).
+    const finalUrlTargets = utmFinalUrlsMap.get(lcKey) ?? utmFinalUrlsMap.get(normKey);
+    if (finalUrlTargets && finalUrlTargets.length) {
+      const activeToday = activeByDate.get(r.date) ?? new Set<string>();
+      const active = finalUrlTargets.filter((cid) => activeToday.has(cid) && knownCampaignIds.has(cid));
+      if (active.length) {
+        const share = { ncs: r.ncs / active.length, amount: r.amount / active.length };
+        for (const cid of active) addToCampaignDate(cid, r.date, share.ncs, share.amount);
+        continue;
+      }
+      // None of the canonical owners active that day — fall through to
+      // asset_group-name match (then to Other if that also fails).
+    }
     // 2) asset_group name → equal split across siblings ACTIVE ON THIS DATE.
     //    Asset-group attribution is the only path that can't tell us which
     //    specific campaign drove the NC, so the 1/N split must exclude
