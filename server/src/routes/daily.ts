@@ -225,11 +225,13 @@ async function buildCampaignPivot(
     }
   }));
 
-  // Window-level activeCampaignIds (cost > 0 anywhere in window). Used to gate
-  // the asset-group equal-split — same rule as the Campaigns tab.
-  const activeCampaignIds = new Set<string>();
+  // PER-DATE active set for the asset-group equal-split. A PMax campaign
+  // that was paused on the conversion date can't have driven that day's
+  // asset-group click → it must not be a denominator on that date. (Window-
+  // level active was over-attributing to campaigns paused mid-window.)
+  // activeByDate[date] = Set<campaign_id> with cost > 0 on that date.
+  const activeByDate = new Map<string, Set<string>>();
   const knownCampaignIds = new Set<string>();
-  // name → campaign_id lookups (used by the byName fallback). Built from campMeta.
   const nameToCampaignId = new Map<string, string>();
   const normNameToCampaignId = new Map<string, string>();
   const normalize = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, '');
@@ -239,11 +241,18 @@ async function buildCampaignPivot(
       nameToCampaignId.set(meta.name.toLowerCase(), meta.campaign_id);
       normNameToCampaignId.set(normalize(meta.name), meta.campaign_id);
     }
-    // Sum cost across all dates for this campaign — if any > 0 it's active.
-    for (const date of new Set([...cellByKey.keys()].filter((k) => k.startsWith(`${cid}|`)).map((k) => k.split('|').slice(2).join('|')))) {
-      const cell = cellByKey.get(`${cid}|${date}`);
-      if ((cell?.cost ?? 0) > 0) { activeCampaignIds.add(meta.campaign_id); break; }
-    }
+  }
+  for (const [key, cell] of cellByKey) {
+    if ((cell.cost ?? 0) <= 0) continue;
+    // Key shape is `${customer}|${campaign}|${date}`. Date may contain '-'
+    // but not '|', so split on '|' and take the trailing piece.
+    const parts = key.split('|');
+    const date = parts[parts.length - 1];
+    const campaignId = parts[1];
+    if (!date || !campaignId) continue;
+    let set = activeByDate.get(date);
+    if (!set) { set = new Set(); activeByDate.set(date, set); }
+    set.add(campaignId);
   }
 
   // 2) Brand-daily totals + per-(date, utm_campaign) Redshift rows + the three
@@ -317,16 +326,21 @@ async function buildCampaignPivot(
     // 1) SKU → Shopping
     const skuTarget = skuToCampaignId.get(lcKey);
     if (skuTarget && knownCampaignIds.has(skuTarget)) { addToCampaignDate(skuTarget, r.date, r.ncs, r.amount); continue; }
-    // 2) asset_group name → equal split across ACTIVE siblings
+    // 2) asset_group name → equal split across siblings ACTIVE ON THIS DATE.
+    //    Asset-group attribution is the only path that can't tell us which
+    //    specific campaign drove the NC, so the 1/N split must exclude
+    //    campaigns that weren't running on the conversion date — otherwise
+    //    a campaign paused mid-window keeps absorbing credit it couldn't have
+    //    earned. If no sibling was active that day → unattributed → Other.
     const agTargets = agNameToCampaignId.get(lcKey) ?? agNameToCampaignId.get(normKey);
     if (agTargets && agTargets.length) {
-      const active = agTargets.filter((cid) => activeCampaignIds.has(cid));
+      const activeToday = activeByDate.get(r.date) ?? new Set<string>();
+      const active = agTargets.filter((cid) => activeToday.has(cid));
       if (active.length) {
         const share = { ncs: r.ncs / active.length, amount: r.amount / active.length };
         for (const cid of active) addToCampaignDate(cid, r.date, share.ncs, share.amount);
         continue;
       }
-      // All paused → unattributed
       addToOther(r.utm_source, r.date, r.ncs, r.amount, r.utm_campaign); continue;
     }
     // 3) byName fuzzy → matching campaign

@@ -24,7 +24,7 @@ import {
   type DerivedMetrics,
   type RawMetrics,
 } from '../services/metrics.js';
-import { fetchByCampaign, fetchTotal } from '../services/redshift.js';
+import { fetchByCampaignDaily, fetchTotal } from '../services/redshift.js';
 import { getDb } from '../db/init.js';
 import { getLoginCustomerId } from '../services/mcc-map.js';
 
@@ -475,18 +475,20 @@ async function mergeRedshiftMetrics(rows: Row[], brandId: number, from: string, 
     }
   } catch { /* ignore */ }
 
-  // Fetch Redshift NCs + Google indexes in parallel.
+  // Fetch Redshift NCs + Google indexes + per-day cost (for the per-date
+  // active gate on asset-group splits) in parallel.
   // ad_id map:           Search campaigns use {creative} → utm_campaign holds AD ID
   // sku map:             Shopping campaigns use {product_id} → utm_campaign holds SKU
   // asset_group_name map: PMax campaigns sometimes use the asset group name verbatim
   //                       (e.g. 'Nutrimix-2', 'IBK') in their tracking template
   const brand = getBrand(brandId);
   const accountIds = brand?.accounts.map((a) => a.customer_id) ?? [];
-  const [rsRows, adIdToCampaignId, skuToCampaignId, agNameToCampaignId] = await Promise.all([
-    fetchByCampaign({ funnelTable: cfg.funnel_table, utmSourceList, dateFrom: from, dateTo: to }),
+  const [dailyRs, adIdToCampaignId, skuToCampaignId, agNameToCampaignId, activeByDate] = await Promise.all([
+    fetchByCampaignDaily({ funnelTable: cfg.funnel_table, utmSourceList, dateFrom: from, dateTo: to }),
     buildAdIdToCampaignIdMap(accountIds),
     buildSkuToCampaignIdMap(accountIds, from, to),
     buildAssetGroupNameToCampaignIdMap(accountIds, from, to),
+    buildActiveByDate(accountIds, from, to),
   ]);
 
   // utm_campaign is sometimes the Google Ads campaign ID (e.g. "23223219977"),
@@ -494,21 +496,14 @@ async function mergeRedshiftMetrics(rows: Row[], brandId: number, from: string, 
   // and sometimes a SKU code (e.g. "MWLJNTP.00480.B0_N"). The funnel table is the
   // only attribution we have — there's no gclid, utm_term, or utm_content stored.
   //
-  // Three-pass match:
-  //   1. exact campaign.id (numeric utm_campaign)
-  //   2. exact lowercase campaign.name
-  //   3. normalized (alphanumeric only) campaign.name
+  // Per-day walk with per-date active gate on the asset-group 1/N split so a
+  // campaign paused on the conversion date can't absorb credit for it. Other
+  // rules (numeric id, SKU, exact name match) intentionally still attribute
+  // to paused campaigns — those are explicit "the URL named this campaign"
+  // matches that the user confirmed should pass through.
   const byId = new Map<string, { ncs: number; amount: number }>();
   const byName = new Map<string, { ncs: number; amount: number }>();
   const byNormName = new Map<string, { ncs: number; amount: number }>();
-
-  // Set of campaign IDs active in this window (had spend / impressions) — used
-  // to constrain the 1/N split so we don't credit NCs to paused-out campaigns
-  // that happen to share an asset_group name.
-  const activeCampaignIds = new Set<string>();
-  for (const row of rows) {
-    if (row.campaign_id && (row.metrics?.cost ?? 0) > 0) activeCampaignIds.add(row.campaign_id);
-  }
 
   function normalize(s: string): string {
     return s.toLowerCase().replace(/[^a-z0-9]+/g, '');
@@ -518,94 +513,78 @@ async function mergeRedshiftMetrics(rows: Row[], brandId: number, from: string, 
     map.set(k, prev ? { ncs: prev.ncs + v.ncs, amount: prev.amount + v.amount } : v);
   }
 
-  for (const r of rsRows) {
-    const entry = { ncs: r.ncs, amount: r.amount };
-    if (/^\d+$/.test(r.utm_campaign)) {
-      // numeric utm_campaign — campaign_id (PMax/DG) or ad_id (Search via {creative}).
-      const target = adIdToCampaignId.get(r.utm_campaign) ?? r.utm_campaign;
-      add(byId, target, entry);
-    } else {
-      // non-numeric — try SKU first (Shopping {product_id}), then asset_group_name
-      // (PMax tracking template), then fall back to campaign name fuzzy matching.
-      // Resolve brand-level alias first (e.g. "IBK" → "Immunity Boosting Kit")
-      // so the rest of the lookup pipeline can find a match.
-      const aliasedCampaign = aliases[r.utm_campaign.toLowerCase()] ?? r.utm_campaign;
-      const lcKey = aliasedCampaign.toLowerCase();
-      const normKey = normalize(aliasedCampaign);
-      const skuTarget = skuToCampaignId.get(lcKey);
-      if (skuTarget) {
-        add(byId, skuTarget, entry);
-        continue;
-      }
-      const agTargets = agNameToCampaignId.get(lcKey) ?? agNameToCampaignId.get(normKey);
-      if (agTargets && agTargets.length) {
-        // Same asset_group name often lives in N PMax campaigns — distribute
-        // equally across only the campaigns that spent in this window. If NONE
-        // spent (asset_group still exists inside paused campaigns only), don't
-        // attribute to a paused row — leave this NC unconsumed so it flows to
-        // the synthetic "Other PMax" residual. Paused campaigns shouldn't get
-        // credit for NCs they couldn't have driven during this window; the old
-        // "fallback to all candidates" path was crediting paused-only families
-        // (e.g. when an asset_group named "Nutrimix" only lives in paused
-        // AllProduct campaigns) and over-counting their NCs.
-        const active = agTargets.filter((cid) => activeCampaignIds.has(cid));
-        if (!active.length) continue;
-        const share = { ncs: r.ncs / active.length, amount: r.amount / active.length };
-        for (const cid of active) add(byId, cid, share);
-        continue;
-      }
-      add(byName, lcKey, entry);
-      add(byNormName, normKey, entry);
-    }
-  }
-
-  // In redshift mode, every row gets calc fields. Unmatched rows default to 0 NCs
-  // (i.e. the campaign exists in Google Ads but generated no NCs in this window
-  // — explicitly zero rather than ambiguous "—").
-  // Track which Redshift rows we successfully attached so we can bucket the rest
-  // into "Other [Channel]" synthetic rows below.
+  // Track consumed per (source, utm_campaign) so the synthetic "Other" residual
+  // catches only Redshift rows we couldn't attribute.
   const consumed = new Set<string>();
   function rsKey(source: string, campaign: string): string { return `${source}|${campaign}`; }
 
-  // Re-walk rsRows so we know which are consumed by direct-row attachment.
-  // (The byId/byName maps lost source/campaign granularity when aggregating.)
-  // For accuracy, we iterate rsRows and check if each row would land on an attached campaign.
-  const matchedCampaignIds = new Set<string>();
-  const matchedNames = new Set<string>();
-  const matchedNormNames = new Set<string>();
+  // Gate: only credit byId entries for campaigns that actually appear in
+  // `rows`. Otherwise the NCs sit orphaned in byId (never attached to any
+  // row) and silently drop — should flow to "Other [Channel]" instead.
+  const knownCampaignIds = new Set<string>();
+  for (const row of rows) if (row.campaign_id) knownCampaignIds.add(row.campaign_id);
+
+  for (const r of dailyRs) {
+    const entry = { ncs: r.ncs, amount: r.amount };
+    if (/^\d+$/.test(r.utm_campaign)) {
+      const target = adIdToCampaignId.get(r.utm_campaign) ?? r.utm_campaign;
+      if (knownCampaignIds.has(target)) {
+        add(byId, target, entry);
+        consumed.add(rsKey(r.utm_source, r.utm_campaign));
+      }
+      continue;
+    }
+    const aliasedCampaign = aliases[r.utm_campaign.toLowerCase()] ?? r.utm_campaign;
+    const lcKey = aliasedCampaign.toLowerCase();
+    const normKey = normalize(aliasedCampaign);
+    const skuTarget = skuToCampaignId.get(lcKey);
+    if (skuTarget && knownCampaignIds.has(skuTarget)) {
+      add(byId, skuTarget, entry);
+      consumed.add(rsKey(r.utm_source, r.utm_campaign));
+      continue;
+    }
+    const agTargets = agNameToCampaignId.get(lcKey) ?? agNameToCampaignId.get(normKey);
+    if (agTargets && agTargets.length) {
+      // Per-date active gate: include a campaign in the 1/N split only if it
+      // had cost > 0 ON r.date. A campaign paused mid-window doesn't get
+      // asset-group credit for orders placed while it was paused.
+      const activeToday = activeByDate.get(r.date) ?? new Set<string>();
+      const active = agTargets.filter((cid) => activeToday.has(cid) && knownCampaignIds.has(cid));
+      if (!active.length) continue;
+      const share = { ncs: r.ncs / active.length, amount: r.amount / active.length };
+      for (const cid of active) add(byId, cid, share);
+      consumed.add(rsKey(r.utm_source, r.utm_campaign));
+      continue;
+    }
+    // Falls through to name fuzzy match — handled by the post-loop pass below.
+    add(byName, lcKey, entry);
+    add(byNormName, normKey, entry);
+  }
+
+  // The per-day loop above already marked numeric/SKU/asset-group matches as
+  // consumed. byName / byNormName matches happen only when the utm_campaign
+  // string exactly matches one of the Row campaign names — confirm that here
+  // and mark consumed accordingly. Anything still unconsumed flows to the
+  // synthetic "Other [Channel]" residual below.
+  const realNames = new Set<string>();
+  const realNormNames = new Set<string>();
   for (const row of rows) {
-    if (row.campaign_id && byId.has(row.campaign_id)) matchedCampaignIds.add(row.campaign_id);
     if (row.campaign_name) {
-      const lc = row.campaign_name.toLowerCase();
-      const nm = normalize(row.campaign_name);
-      if (byName.has(lc)) matchedNames.add(lc);
-      if (byNormName.has(nm)) matchedNormNames.add(nm);
+      realNames.add(row.campaign_name.toLowerCase());
+      realNormNames.add(normalize(row.campaign_name));
     }
   }
-  for (const r of rsRows) {
-    let attributed = false;
-    if (/^\d+$/.test(r.utm_campaign)) {
-      const cid = adIdToCampaignId.get(r.utm_campaign) ?? r.utm_campaign;
-      if (matchedCampaignIds.has(cid)) attributed = true;
-    } else {
-      const aliasedCampaign = aliases[r.utm_campaign.toLowerCase()] ?? r.utm_campaign;
-      const lcKey = aliasedCampaign.toLowerCase();
-      const normKey = normalize(aliasedCampaign);
-      const skuTarget = skuToCampaignId.get(lcKey);
-      const agTargets = agNameToCampaignId.get(lcKey) ?? agNameToCampaignId.get(normKey);
-      if ((skuTarget && matchedCampaignIds.has(skuTarget))
-          // Asset-group equal-split: only count as attributed if at least one
-          // campaign owning this asset_group is ACTIVE in the window — mirrors
-          // the first-pass filter so we don't mark the row consumed when the
-          // first pass actually skipped it (would otherwise drop those NCs
-          // instead of routing them to the synthetic "Other" residual).
-          || (agTargets && agTargets.some((cid) => activeCampaignIds.has(cid)))
-          || matchedNames.has(lcKey)
-          || matchedNormNames.has(normKey)) {
-        attributed = true;
-      }
+  for (const r of dailyRs) {
+    if (/^\d+$/.test(r.utm_campaign)) continue; // numeric path handled inline
+    const aliasedCampaign = aliases[r.utm_campaign.toLowerCase()] ?? r.utm_campaign;
+    const lcKey = aliasedCampaign.toLowerCase();
+    const normKey = normalize(aliasedCampaign);
+    if (skuToCampaignId.has(lcKey)) continue;                    // SKU handled inline
+    const agTargets = agNameToCampaignId.get(lcKey) ?? agNameToCampaignId.get(normKey);
+    if (agTargets && agTargets.length) continue;                 // asset-group handled inline
+    if (realNames.has(lcKey) || realNormNames.has(normKey)) {
+      consumed.add(rsKey(r.utm_source, r.utm_campaign));
     }
-    if (attributed) consumed.add(rsKey(r.utm_source, r.utm_campaign));
   }
 
   const attachedRows = rows.map((row) => {
@@ -629,18 +608,25 @@ async function mergeRedshiftMetrics(rows: Row[], brandId: number, from: string, 
   // but real NCs/amount, so brand-level NC totals reconcile with the per-campaign
   // table once the user adds them up.
   const residualBySource = new Map<string, { ncs: number; amount: number; samples: string[] }>();
-  for (const r of rsRows) {
+  for (const r of dailyRs) {
     if (consumed.has(rsKey(r.utm_source, r.utm_campaign))) continue;
     const prev = residualBySource.get(r.utm_source) ?? { ncs: 0, amount: 0, samples: [] };
     prev.ncs += r.ncs;
     prev.amount += r.amount;
-    if (prev.samples.length < 5) prev.samples.push(r.utm_campaign);
+    if (prev.samples.length < 5 && !prev.samples.includes(r.utm_campaign)) prev.samples.push(r.utm_campaign);
     residualBySource.set(r.utm_source, prev);
   }
 
+  // Apply the same flat RTO factor we apply to real campaign NCs (via
+  // attachRedshiftMetrics) — synthetic Other rows showed pre-RTO NCs before,
+  // which made the Campaigns tab disagree with the Daily pivot at exactly
+  // the RTO factor (e.g. LJ Other 439 / 0.9 = 395 = Daily's Other). Project
+  // convention is all NCs displayed post-RTO.
+  const ncMul = 1 - (brand?.rto_factor ?? 0);
+  const revMul = 1 - (brand?.revenue_rto_factor ?? brand?.rto_factor ?? 0);
   for (const [source, residual] of residualBySource) {
     if (residual.ncs <= 0 && residual.amount <= 0) continue;
-    attachedRows.push(buildOtherRow(source, residual.ncs, residual.amount, residual.samples));
+    attachedRows.push(buildOtherRow(source, residual.ncs * ncMul, residual.amount * revMul, residual.samples));
   }
 
   return attachedRows;
@@ -695,6 +681,51 @@ function buildOtherRow(utmSource: string, ncs: number, amount: number, samples: 
  * Indexed by both lowercase and alphanumeric-normalized name so tracking
  * templates that use 'brain_gummies' resolve to asset group 'Brain Gummies'.
  */
+/**
+ * Build a {date → Set<campaign_id>} index of campaigns that had cost > 0 on
+ * each day in the window. Used by mergeRedshiftMetrics and buildCampaignPivot
+ * to constrain the asset-group 1/N split — a campaign paused on the conversion
+ * date can't have driven that day's asset-group click.
+ */
+export async function buildActiveByDate(
+  customerIds: string[],
+  from: string,
+  to: string
+): Promise<Map<string, Set<string>>> {
+  if (!customerIds.length) return new Map();
+  const query = `
+    SELECT campaign.id, segments.date, metrics.cost_micros
+    FROM campaign
+    WHERE segments.date BETWEEN '${from}' AND '${to}'
+      AND campaign.status != 'REMOVED'
+      AND metrics.cost_micros > 0
+  `.trim();
+  const result = new Map<string, Set<string>>();
+  await Promise.all(
+    customerIds.map(async (cid) => {
+      try {
+        const loginCustomerId = (await getLoginCustomerId(cid)) ?? undefined;
+        const rows = await search<{
+          campaign?: { id?: string };
+          segments?: { date?: string };
+          metrics?: { costMicros?: string };
+        }>({ customerId: cid, loginCustomerId, query });
+        for (const r of rows) {
+          const id = r.campaign?.id; const d = r.segments?.date;
+          const cost = Number(r.metrics?.costMicros ?? 0);
+          if (!id || !d || cost <= 0) continue;
+          let set = result.get(d);
+          if (!set) { set = new Set(); result.set(d, set); }
+          set.add(id);
+        }
+      } catch (err) {
+        console.error(`[active-by-date] customer ${cid} failed:`, err instanceof Error ? err.message : String(err));
+      }
+    })
+  );
+  return result;
+}
+
 export async function buildAssetGroupNameToCampaignIdMap(
   customerIds: string[],
   _from: string,
