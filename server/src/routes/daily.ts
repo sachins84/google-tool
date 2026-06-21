@@ -286,7 +286,7 @@ async function buildCampaignPivot(
         buildAdIdToCampaignIdMap(accountIds),
         buildSkuToCampaignIdMap(accountIds, from, to),
         buildAssetGroupNameToCampaignIdMap(accountIds, from, to),
-        buildUtmCampaignFromFinalUrlsMap(accountIds),
+        buildUtmCampaignFromFinalUrlsMap(accountIds, from, to),
       ]);
       for (const r of brandDaily) brandDailyMap.set(r.date, { ncs: r.ncs, amount: r.amount });
       dailyRs = perDayRs;

@@ -488,7 +488,7 @@ async function mergeRedshiftMetrics(rows: Row[], brandId: number, from: string, 
     buildAdIdToCampaignIdMap(accountIds),
     buildSkuToCampaignIdMap(accountIds, from, to),
     buildAssetGroupNameToCampaignIdMap(accountIds, from, to),
-    buildUtmCampaignFromFinalUrlsMap(accountIds),
+    buildUtmCampaignFromFinalUrlsMap(accountIds, from, to),
     buildActiveByDate(accountIds, from, to),
   ]);
 
@@ -692,23 +692,29 @@ function buildOtherRow(utmSource: string, ncs: number, amount: number, samples: 
  * templates that use 'brain_gummies' resolve to asset group 'Brain Gummies'.
  */
 /**
- * Build {utm_campaign-value → Set<campaign_id>} by parsing every PMax
- * asset_group's final_urls for `utm_campaign=X` tokens. This is Google Ads's
- * own record of which utm_campaign string ends up in click URLs for which
- * campaign — far more reliable than fuzzy asset-group-name matching.
+ * Build {utm_campaign-value → Set<campaign_id>} by parsing every utm_campaign
+ * token Google Ads ACTUALLY emits in click URLs — sourced from TWO endpoints:
  *
- * Why: when a PMax campaign's tracking template puts both
- *     utm_campaign=Calcium_Gummies   (from asset_group.final_urls)
- *     utm_campaign={campaignid}      (from campaign.tracking_url_template)
- * into the click URL, Magento's parser can pick either value. The numeric
- * form resolves directly via adIdToCampaignId; the named form previously
- * leaked to "Other PMax" because the ENABLED-asset_group-name map didn't
- * link "Calcium_Gummies" to the right campaign. This map closes that gap.
+ *   1. landing_page_view.unexpanded_final_url — the URLs Google generates for
+ *      clicks on each campaign, including ad-level final_urls + sitelinks +
+ *      extensions + Final URL Expansion + the {ignore} macro behavior.
+ *   2. asset_group.final_urls — PMax-only config; included as a belt-and-
+ *      braces fallback for asset_groups whose URLs haven't served clicks in
+ *      the window (and so wouldn't appear in landing_page_view).
+ *
+ * Why: Magento's URL parser stores whichever utm_campaign value lands in the
+ * order URL (sometimes the auto-tagged `{creative}`/`{campaignid}` form,
+ * sometimes a hardcoded asset/sitelink string like `Search_Brand_MM`). We
+ * need to know which CAMPAIGNS actually emit each utm_campaign string. Then
+ * for orders tagged with that string, attribute to the campaign(s) that
+ * own it — filtered to those active on the conversion date.
  *
  * Indexed by both lowercase and alphanumeric-normalized forms.
  */
 export async function buildUtmCampaignFromFinalUrlsMap(
-  customerIds: string[]
+  customerIds: string[],
+  from?: string,
+  to?: string,
 ): Promise<Map<string, string[]>> {
   if (!customerIds.length) return new Map();
   const byUtm = new Map<string, Set<string>>();
@@ -720,9 +726,42 @@ export async function buildUtmCampaignFromFinalUrlsMap(
     while ((m = re.exec(s)) !== null) if (m[1] && !out.includes(m[1])) out.push(m[1]);
     return out;
   };
+
+  // Default landing_page_view window to last 30 days if no window passed.
+  // landing_page_view requires a date range; we use the attribution window so
+  // we capture URLs Google emitted for clicks that could plausibly be
+  // converting in this same window.
+  const lpvFrom = from ?? new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
+  const lpvTo = to ?? new Date().toISOString().slice(0, 10);
+
   await Promise.all(customerIds.map(async (cid) => {
+    const loginCustomerId = (await getLoginCustomerId(cid)) ?? undefined;
+    // (1) landing_page_view — covers ALL channel types
     try {
-      const loginCustomerId = (await getLoginCustomerId(cid)) ?? undefined;
+      const rows = await search<{
+        campaign?: { id?: string };
+        landingPageView?: { unexpandedFinalUrl?: string };
+      }>({
+        customerId: cid, loginCustomerId,
+        query: `SELECT campaign.id, landing_page_view.unexpanded_final_url
+                FROM landing_page_view
+                WHERE segments.date BETWEEN '${lpvFrom}' AND '${lpvTo}'`,
+      });
+      for (const r of rows) {
+        const id = r.campaign?.id; const url = r.landingPageView?.unexpandedFinalUrl;
+        if (!id || !url) continue;
+        for (const v of extract(url)) {
+          const lc = v.toLowerCase();
+          let s = byUtm.get(lc); if (!s) { s = new Set(); byUtm.set(lc, s); }
+          s.add(id);
+        }
+      }
+    } catch (err) {
+      console.error(`[utm-lpv] customer ${cid} failed:`, err instanceof Error ? err.message : String(err));
+    }
+    // (2) asset_group.final_urls — PMax-only fallback for configured URLs
+    //     that haven't served clicks in window
+    try {
       const rows = await search<{
         campaign?: { id?: string };
         assetGroup?: { finalUrls?: string[] };
@@ -744,7 +783,7 @@ export async function buildUtmCampaignFromFinalUrlsMap(
         }
       }
     } catch (err) {
-      console.error(`[utm-final-urls] customer ${cid} failed:`, err instanceof Error ? err.message : String(err));
+      console.error(`[utm-ag-final-urls] customer ${cid} failed:`, err instanceof Error ? err.message : String(err));
     }
   }));
   const result = new Map<string, string[]>();
