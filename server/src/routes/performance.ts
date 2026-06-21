@@ -503,8 +503,6 @@ async function mergeRedshiftMetrics(rows: Row[], brandId: number, from: string, 
   // to paused campaigns — those are explicit "the URL named this campaign"
   // matches that the user confirmed should pass through.
   const byId = new Map<string, { ncs: number; amount: number }>();
-  const byName = new Map<string, { ncs: number; amount: number }>();
-  const byNormName = new Map<string, { ncs: number; amount: number }>();
 
   function normalize(s: string): string {
     return s.toLowerCase().replace(/[^a-z0-9]+/g, '');
@@ -523,7 +521,15 @@ async function mergeRedshiftMetrics(rows: Row[], brandId: number, from: string, 
   // `rows`. Otherwise the NCs sit orphaned in byId (never attached to any
   // row) and silently drop — should flow to "Other [Channel]" instead.
   const knownCampaignIds = new Set<string>();
-  for (const row of rows) if (row.campaign_id) knownCampaignIds.add(row.campaign_id);
+  const nameToCampaignId = new Map<string, string>();
+  const normNameToCampaignId = new Map<string, string>();
+  for (const row of rows) {
+    if (row.campaign_id) knownCampaignIds.add(row.campaign_id);
+    if (row.campaign_id && row.campaign_name) {
+      nameToCampaignId.set(row.campaign_name.toLowerCase(), row.campaign_id);
+      normNameToCampaignId.set(normalize(row.campaign_name), row.campaign_id);
+    }
+  }
 
   for (const r of dailyRs) {
     const entry = { ncs: r.ncs, amount: r.amount };
@@ -575,44 +581,28 @@ async function mergeRedshiftMetrics(rows: Row[], brandId: number, from: string, 
       consumed.add(rsKey(r.utm_source, r.utm_campaign));
       continue;
     }
-    // Falls through to name fuzzy match — handled by the post-loop pass below.
-    add(byName, lcKey, entry);
-    add(byNormName, normKey, entry);
+    // byName fallback: per-date active gate. Same rule as the asset-group /
+    // final_urls paths — a paused campaign whose name appears in final_url_suffix
+    // (e.g. Search_Brand_MM) can't have served the click that day, so its
+    // name match doesn't earn the NC. If no active campaign owns the string
+    // deterministically, the row flows to "Other [Channel]".
+    const nameTarget = nameToCampaignId.get(lcKey) ?? normNameToCampaignId.get(normKey);
+    if (nameTarget) {
+      const activeToday = activeByDate.get(r.date) ?? new Set<string>();
+      if (activeToday.has(nameTarget)) {
+        add(byId, nameTarget, entry);
+        consumed.add(rsKey(r.utm_source, r.utm_campaign));
+      }
+      // else: matched a paused campaign → don't attribute → falls to "Other"
+    }
   }
 
-  // The per-day loop above already marked numeric/SKU/asset-group matches as
-  // consumed. byName / byNormName matches happen only when the utm_campaign
-  // string exactly matches one of the Row campaign names — confirm that here
-  // and mark consumed accordingly. Anything still unconsumed flows to the
-  // synthetic "Other [Channel]" residual below.
-  const realNames = new Set<string>();
-  const realNormNames = new Set<string>();
-  for (const row of rows) {
-    if (row.campaign_name) {
-      realNames.add(row.campaign_name.toLowerCase());
-      realNormNames.add(normalize(row.campaign_name));
-    }
-  }
-  for (const r of dailyRs) {
-    if (/^\d+$/.test(r.utm_campaign)) continue; // numeric path handled inline
-    const aliasedCampaign = aliases[r.utm_campaign.toLowerCase()] ?? r.utm_campaign;
-    const lcKey = aliasedCampaign.toLowerCase();
-    const normKey = normalize(aliasedCampaign);
-    if (skuToCampaignId.has(lcKey)) continue;                    // SKU handled inline
-    if (utmFinalUrlsMap.has(lcKey) || utmFinalUrlsMap.has(normKey)) continue; // final_urls handled inline
-    const agTargets = agNameToCampaignId.get(lcKey) ?? agNameToCampaignId.get(normKey);
-    if (agTargets && agTargets.length) continue;                 // asset-group handled inline
-    if (realNames.has(lcKey) || realNormNames.has(normKey)) {
-      consumed.add(rsKey(r.utm_source, r.utm_campaign));
-    }
-  }
+  // All attribution paths (numeric, SKU, final_urls, asset-group name,
+  // byName) are now handled inline in the main loop with consumed marking.
+  // No post-loop pass needed — anything still unconsumed flows to "Other".
 
   const attachedRows = rows.map((row) => {
-    let rs = row.campaign_id ? byId.get(row.campaign_id) : undefined;
-    if (!rs && row.campaign_name) {
-      rs = byName.get(row.campaign_name.toLowerCase())
-        ?? byNormName.get(normalize(row.campaign_name));
-    }
+    const rs = row.campaign_id ? byId.get(row.campaign_id) : undefined;
     return {
       ...row,
       metrics: attachRedshiftMetrics(

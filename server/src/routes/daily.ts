@@ -360,9 +360,19 @@ async function buildCampaignPivot(
       }
       addToOther(r.utm_source, r.date, r.ncs, r.amount, r.utm_campaign); continue;
     }
-    // 3) byName fuzzy → matching campaign
+    // 3) byName fuzzy → matching campaign, but ONLY if that campaign is active
+    //    on r.date. byName matches come from final_url_suffix templates that
+    //    hardcode the campaign name; when the campaign is renamed/paused but
+    //    sticky cart UTMs keep arriving, name-based attribution to the paused
+    //    campaign is wrong — those NCs should flow to Other (or an alias-
+    //    configured target) instead of crediting a campaign that didn't serve
+    //    that day's click.
     const nameTarget = nameToCampaignId.get(lcKey) ?? normNameToCampaignId.get(normKey);
-    if (nameTarget) { addToCampaignDate(nameTarget, r.date, r.ncs, r.amount); continue; }
+    if (nameTarget) {
+      const activeToday = activeByDate.get(r.date) ?? new Set<string>();
+      if (activeToday.has(nameTarget)) { addToCampaignDate(nameTarget, r.date, r.ncs, r.amount); continue; }
+      // Matched a paused/zero-spend campaign by name — fall through to Other.
+    }
     // 4) nothing matched
     addToOther(r.utm_source, r.date, r.ncs, r.amount, r.utm_campaign);
   }
